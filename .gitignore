@@ -18,4 +18,5 @@ infra/terraform/.terraform/
 .idea/
 .vscode/
 .cache/
+.claude/
 
