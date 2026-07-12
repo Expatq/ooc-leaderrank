@@ -20,3 +20,4 @@ infra/terraform/.terraform/
 .cache/
 .claude/
 
+.claude/settings.local.json
