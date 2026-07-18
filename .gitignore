@@ -2,6 +2,7 @@ build/
 build-release/
 build-debug/
 cmake-build-*/
+tests/golden
 compile_commands.json
 
 data/
