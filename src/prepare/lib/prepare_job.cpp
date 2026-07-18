@@ -15,37 +15,6 @@ namespace lr::prepare {
 PrepareJob::PrepareJob(PrepareConfig config, std::ostream* progress)
     : Config_(std::move(config)), Progress_(progress) {}
 
-void PrepareJob::Report(const std::string& line) const {
-	if (Progress_ != nullptr) {
-		*Progress_ << line << '\n';
-		Progress_->flush();
-	}
-}
-
-void PrepareJob::RecreateWorkdir() const {
-	const grid::WorkdirRoot root = grid::WorkdirLayout(Config_.workdir).Root();
-	std::filesystem::remove_all(root.Path());
-	std::filesystem::create_directories(root.DegreesDir().Path());
-	std::filesystem::create_directories(root.PresentDir().Path());
-}
-
-void PrepareJob::WriteMeta(const PrepareReport& report) const {
-	grid::Meta meta;
-	meta.transpose = Config_.transpose ? 1 : 0;
-	meta.threadsPlanned = Config_.threadsPlanned;
-	meta.maxId = report.scheme.maxId;
-	meta.intervalSize = report.scheme.intervalSize;
-	meta.partitions = report.scheme.partitions;
-	meta.vertices = report.degrees.vertices;
-	meta.edgesRaw = report.scan.edgesRaw;
-	meta.edges = report.scatter.edgesWritten - report.assembly.droppedDuplicates;
-	meta.droppedSelfLoops = report.scatter.droppedSelfLoops;
-	meta.droppedDuplicates = report.assembly.droppedDuplicates;
-	meta.maxOutDegree = report.degrees.maxOutDegree;
-	meta.maxInDegree = report.assembly.maxInDegree;
-	meta.Save(grid::WorkdirLayout(Config_.workdir).Root());
-}
-
 PrepareReport PrepareJob::Run() {
 	PrepareReport report{};
 
@@ -93,6 +62,37 @@ PrepareReport PrepareJob::Run() {
 
 	WriteMeta(report);
 	return report;
+}
+
+void PrepareJob::RecreateWorkdir() const {
+	const grid::WorkdirRoot root = grid::WorkdirLayout(Config_.workdir).Root();
+	std::filesystem::remove_all(root.Path());
+	std::filesystem::create_directories(root.DegreesDir().Path());
+	std::filesystem::create_directories(root.PresentDir().Path());
+}
+
+void PrepareJob::WriteMeta(const PrepareReport& report) const {
+	grid::Meta meta;
+	meta.transpose = Config_.transpose ? 1 : 0;
+	meta.threadsPlanned = Config_.threadsPlanned;
+	meta.maxId = report.scheme.maxId;
+	meta.intervalSize = report.scheme.intervalSize;
+	meta.partitions = report.scheme.partitions;
+	meta.vertices = report.degrees.vertices;
+	meta.edgesRaw = report.scan.edgesRaw;
+	meta.edges = report.scatter.edgesWritten - report.assembly.droppedDuplicates;
+	meta.droppedSelfLoops = report.scatter.droppedSelfLoops;
+	meta.droppedDuplicates = report.assembly.droppedDuplicates;
+	meta.maxOutDegree = report.degrees.maxOutDegree;
+	meta.maxInDegree = report.assembly.maxInDegree;
+	meta.Save(grid::WorkdirLayout(Config_.workdir).Root());
+}
+
+void PrepareJob::Report(const std::string& line) const {
+	if (Progress_ != nullptr) {
+		*Progress_ << line << '\n';
+		Progress_->flush();
+	}
 }
 
 } // namespace lr::prepare

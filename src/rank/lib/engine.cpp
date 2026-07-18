@@ -45,6 +45,44 @@ Engine::Engine(const grid::WorkdirRoot& workdir, uint64_t budgetBytes, double ep
 	    std::make_unique<grid::BlockIndex>(grid::BlockIndex::Load(Workdir_.BlocksIdx(), Scheme_));
 }
 
+RankResult Engine::Run() {
+	const uint64_t rankFileBytes = Scheme_.VertexCount() * common::kRankBytesPerVertex;
+	common::RandomAccessFile rankA(Workdir_.RankFile(kCurrentSide).string(), rankFileBytes);
+	common::RandomAccessFile rankB(Workdir_.RankFile(kNextSide).string(), rankFileBytes);
+	InitializeRanks(&rankA);
+
+	const common::InputFile blocksBin(Workdir_.BlocksBin().string());
+	blocksBin.AdviseSequential();
+	grid::BlockReader reader(&blocksBin, ChunkBytes_);
+
+	common::RandomAccessFile* current = &rankA;
+	common::RandomAccessFile* next = &rankB;
+	uint32_t currentSide = kCurrentSide;
+
+	RankResult result{0, false, 0.0, 0.0, currentSide};
+	for (uint32_t iteration = 1; iteration <= MaxIterations_; ++iteration) {
+		const auto startedAt = std::chrono::steady_clock::now();
+		const double deltaPerVertex = IterateOnce(&reader, *current, next);
+		const std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - startedAt;
+
+		std::swap(current, next);
+		currentSide = 1 - currentSide;
+		std::cout << std::format("iteration {}: L1/N={:.3e} s_g={:.6f} time={:.3f}s\n", iteration,
+		                         deltaPerVertex, GroundScore_, elapsed.count());
+		std::cout.flush();
+
+		result.iterations = iteration;
+		result.finalDeltaPerVertex = deltaPerVertex;
+		if (deltaPerVertex < Eps_) {
+			result.converged = true;
+			break;
+		}
+	}
+	result.groundScore = GroundScore_;
+	result.rankFileSide = currentSide;
+	return result;
+}
+
 const grid::Meta& Engine::GetMeta() const {
 	return Meta_;
 }
@@ -144,44 +182,6 @@ double Engine::IterateOnce(grid::BlockReader* reader, const common::RandomAccess
 	}
 	GroundScore_ = groundNext;
 	return deltaL1 / vertexCount;
-}
-
-RankResult Engine::Run() {
-	const uint64_t rankFileBytes = Scheme_.VertexCount() * common::kRankBytesPerVertex;
-	common::RandomAccessFile rankA(Workdir_.RankFile(kCurrentSide).string(), rankFileBytes);
-	common::RandomAccessFile rankB(Workdir_.RankFile(kNextSide).string(), rankFileBytes);
-	InitializeRanks(&rankA);
-
-	const common::InputFile blocksBin(Workdir_.BlocksBin().string());
-	blocksBin.AdviseSequential();
-	grid::BlockReader reader(&blocksBin, ChunkBytes_);
-
-	common::RandomAccessFile* current = &rankA;
-	common::RandomAccessFile* next = &rankB;
-	uint32_t currentSide = kCurrentSide;
-
-	RankResult result{0, false, 0.0, 0.0, currentSide};
-	for (uint32_t iteration = 1; iteration <= MaxIterations_; ++iteration) {
-		const auto startedAt = std::chrono::steady_clock::now();
-		const double deltaPerVertex = IterateOnce(&reader, *current, next);
-		const std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - startedAt;
-
-		std::swap(current, next);
-		currentSide = 1 - currentSide;
-		std::cout << std::format("iteration {}: L1/N={:.3e} s_g={:.6f} time={:.3f}s\n", iteration,
-		                         deltaPerVertex, GroundScore_, elapsed.count());
-		std::cout.flush();
-
-		result.iterations = iteration;
-		result.finalDeltaPerVertex = deltaPerVertex;
-		if (deltaPerVertex < Eps_) {
-			result.converged = true;
-			break;
-		}
-	}
-	result.groundScore = GroundScore_;
-	result.rankFileSide = currentSide;
-	return result;
 }
 
 } // namespace lr::rank

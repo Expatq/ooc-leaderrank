@@ -14,8 +14,7 @@ BlockIndex BlockIndex::Load(const std::filesystem::path& path, const PartitionSc
 	BlockIndex index(scheme);
 	const common::InputFile file(path.string());
 	if (file.SizeBytes() != index.SizeBytes()) {
-		throw std::runtime_error(std::format("{}: size is {} bytes, expected {}", path.string(),
-		                                     file.SizeBytes(), index.SizeBytes()));
+		throw std::runtime_error(std::format("{}: size is {} bytes, expected {}", path.string(), file.SizeBytes(), index.SizeBytes()));
 	}
 	file.ReadAt(0, index.Refs_.data(), index.Refs_.size() * sizeof(BlockRef));
 	return index;

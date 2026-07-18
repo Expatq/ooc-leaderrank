@@ -18,8 +18,7 @@ uint64_t CeilDiv(uint64_t dividend, uint64_t divisor) {
 	return (dividend + divisor - 1) / divisor;
 }
 
-bool SortArenaFits(uint64_t vertexCount, uint64_t edgesRaw, uint64_t usableBytes,
-                   uint64_t partitions) {
+bool SortArenaFits(uint64_t vertexCount, uint64_t edgesRaw, uint64_t usableBytes, uint64_t partitions) {
 	const Uint128 arena = Uint128(common::kEdgeBytes) * edgesRaw +
 	                      Uint128(common::kDegreeBytesPerVertex) * vertexCount * partitions;
 	return arena <= Uint128(usableBytes) * partitions * partitions;
@@ -57,6 +56,34 @@ PartitionPlanner::PartitionPlanner(uint64_t budgetBytes, uint32_t threads)
 	if (threads == 0) {
 		throw std::runtime_error("thread count must be positive");
 	}
+}
+
+PartitionScheme PartitionPlanner::Plan(uint32_t maxId, uint64_t edgesRaw) const {
+	if (!Feasible(maxId, edgesRaw)) {
+		throw std::runtime_error(
+		    std::format("budget of {} bytes is infeasible for this graph (max_id={}, edges={}): "
+		                "minimum feasible budget is {} bytes",
+		                BudgetBytes_, maxId, edgesRaw, MinBudgetBytes(maxId, edgesRaw)));
+	}
+	const uint64_t vertexCount = uint64_t{maxId} + 1;
+	const uint64_t partitions = ChoosePartitions(vertexCount, edgesRaw);
+	const uint64_t intervalSize = CeilDiv(vertexCount, partitions);
+	return PartitionScheme{maxId, static_cast<uint32_t>(partitions),
+	                       static_cast<uint32_t>(intervalSize)};
+}
+
+uint64_t PartitionPlanner::MinBudgetBytes(uint32_t maxId, uint64_t edgesRaw) const {
+	uint64_t lowBytes = 64_KiB;
+	uint64_t highBytes = 1_TiB;
+	while (lowBytes < highBytes) {
+		const uint64_t midBytes = lowBytes + (highBytes - lowBytes) / 2;
+		if (PartitionPlanner(midBytes, Threads_).Feasible(maxId, edgesRaw)) {
+			highBytes = midBytes;
+		} else {
+			lowBytes = midBytes + 1;
+		}
+	}
+	return lowBytes;
 }
 
 uint64_t PartitionPlanner::IoChunkBytes() const {
@@ -104,34 +131,6 @@ bool PartitionPlanner::Feasible(uint32_t maxId, uint64_t edgesRaw) const {
 		return false;
 	}
 	return usable / (partitions * partitions) >= common::kScatterMinBufferBytes;
-}
-
-PartitionScheme PartitionPlanner::Plan(uint32_t maxId, uint64_t edgesRaw) const {
-	if (!Feasible(maxId, edgesRaw)) {
-		throw std::runtime_error(
-		    std::format("budget of {} bytes is infeasible for this graph (max_id={}, edges={}): "
-		                "minimum feasible budget is {} bytes",
-		                BudgetBytes_, maxId, edgesRaw, MinBudgetBytes(maxId, edgesRaw)));
-	}
-	const uint64_t vertexCount = uint64_t{maxId} + 1;
-	const uint64_t partitions = ChoosePartitions(vertexCount, edgesRaw);
-	const uint64_t intervalSize = CeilDiv(vertexCount, partitions);
-	return PartitionScheme{maxId, static_cast<uint32_t>(partitions),
-	                       static_cast<uint32_t>(intervalSize)};
-}
-
-uint64_t PartitionPlanner::MinBudgetBytes(uint32_t maxId, uint64_t edgesRaw) const {
-	uint64_t lowBytes = 64_KiB;
-	uint64_t highBytes = 1_TiB;
-	while (lowBytes < highBytes) {
-		const uint64_t midBytes = lowBytes + (highBytes - lowBytes) / 2;
-		if (PartitionPlanner(midBytes, Threads_).Feasible(maxId, edgesRaw)) {
-			highBytes = midBytes;
-		} else {
-			lowBytes = midBytes + 1;
-		}
-	}
-	return lowBytes;
 }
 
 } // namespace lr::grid

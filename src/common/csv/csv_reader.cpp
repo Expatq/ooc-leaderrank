@@ -66,8 +66,35 @@ CsvEdgeStream::CsvEdgeStream(const std::string& path, bool transpose)
 	}
 }
 
-void CsvEdgeStream::Fail(std::string_view reason) const {
-	throw std::runtime_error(std::format("{}:{}: {}", Path_, LineNo_, reason));
+bool CsvEdgeStream::Next(Edge* out) {
+	while (std::getline(Input_, Line_)) {
+		++LineNo_;
+		const std::string_view line = Strip(Line_);
+		if (line.empty() || line.front() == kCommentChar) {
+			continue;
+		}
+		if (!HeaderChecked_) {
+			HeaderChecked_ = true;
+			const TwoColumns columns = SplitTwoColumns(line);
+			if (!columns.ok || !LooksLikeNumber(columns.first) ||
+			    !LooksLikeNumber(columns.second)) {
+				continue;
+			}
+		}
+		ParseDataLine(line, out);
+		return true;
+	}
+	return false;
+}
+
+void CsvEdgeStream::ParseDataLine(std::string_view line, Edge* out) const {
+	const TwoColumns columns = SplitTwoColumns(line);
+	if (!columns.ok) {
+		Fail("expected two columns");
+	}
+	const uint32_t from = ParseId(columns.first);
+	const uint32_t to = ParseId(columns.second);
+	*out = Transpose_ ? Edge{to, from} : Edge{from, to};
 }
 
 uint32_t CsvEdgeStream::ParseId(std::string_view token) const {
@@ -89,35 +116,8 @@ uint32_t CsvEdgeStream::ParseId(std::string_view token) const {
 	return static_cast<uint32_t>(value);
 }
 
-void CsvEdgeStream::ParseDataLine(std::string_view line, Edge* out) const {
-	const TwoColumns columns = SplitTwoColumns(line);
-	if (!columns.ok) {
-		Fail("expected two columns");
-	}
-	const uint32_t from = ParseId(columns.first);
-	const uint32_t to = ParseId(columns.second);
-	*out = Transpose_ ? Edge{to, from} : Edge{from, to};
-}
-
-bool CsvEdgeStream::Next(Edge* out) {
-	while (std::getline(Input_, Line_)) {
-		++LineNo_;
-		const std::string_view line = Strip(Line_);
-		if (line.empty() || line.front() == kCommentChar) {
-			continue;
-		}
-		if (!HeaderChecked_) {
-			HeaderChecked_ = true;
-			const TwoColumns columns = SplitTwoColumns(line);
-			if (!columns.ok || !LooksLikeNumber(columns.first) ||
-			    !LooksLikeNumber(columns.second)) {
-				continue;
-			}
-		}
-		ParseDataLine(line, out);
-		return true;
-	}
-	return false;
+void CsvEdgeStream::Fail(std::string_view reason) const {
+	throw std::runtime_error(std::format("{}:{}: {}", Path_, LineNo_, reason));
 }
 
 EdgeScanner::EdgeScanner(const std::string& path) : Path_(path) {}

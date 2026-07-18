@@ -161,13 +161,6 @@ OutputFile::~OutputFile() {
 	::close(Fd_);
 }
 
-void OutputFile::MaybeWriteback() {
-	if (OffsetBytes_ - SyncedBytes_ >= kWritebackChunkBytes) {
-		SyncRangeAndDrop(Fd_, SyncedBytes_, OffsetBytes_ - SyncedBytes_);
-		SyncedBytes_ = OffsetBytes_;
-	}
-}
-
 void OutputFile::Append(const void* src, size_t bytes) {
 	WriteExact(Fd_, Path_, OffsetBytes_, src, bytes);
 	OffsetBytes_ += bytes;
@@ -181,6 +174,13 @@ void OutputFile::PadToAlignment(uint64_t alignmentBytes) {
 		const size_t portion = std::min<uint64_t>(padBytes, zeros.size());
 		Append(zeros.data(), portion);
 		padBytes -= portion;
+	}
+}
+
+void OutputFile::MaybeWriteback() {
+	if (OffsetBytes_ - SyncedBytes_ >= kWritebackChunkBytes) {
+		SyncRangeAndDrop(Fd_, SyncedBytes_, OffsetBytes_ - SyncedBytes_);
+		SyncedBytes_ = OffsetBytes_;
 	}
 }
 

@@ -39,18 +39,6 @@ EdgeScatterer::EdgeScatterer(const grid::PartitionScheme& scheme, const grid::Wo
 	Counts_.assign(blocks, 0);
 }
 
-void EdgeScatterer::Flush(uint32_t block) {
-	if (Counts_[block] == 0) {
-		return;
-	}
-	const uint32_t srcInterval = block / Scheme_.partitions;
-	const uint32_t dstInterval = block % Scheme_.partitions;
-	common::AppendToFile(Tmp_.Block(srcInterval, dstInterval).string(),
-	                     Arena_.data() + block * CapacityEdges_,
-	                     Counts_[block] * common::kEdgeBytes);
-	Counts_[block] = 0;
-}
-
 ScatterResult EdgeScatterer::Run(common::CsvEdgeStream* input) {
 	std::filesystem::create_directories(Tmp_.Path());
 	ScatterResult result{0, 0};
@@ -72,6 +60,18 @@ ScatterResult EdgeScatterer::Run(common::CsvEdgeStream* input) {
 		Flush(block);
 	}
 	return result;
+}
+
+void EdgeScatterer::Flush(uint32_t block) {
+	if (Counts_[block] == 0) {
+		return;
+	}
+	const uint32_t srcInterval = block / Scheme_.partitions;
+	const uint32_t dstInterval = block % Scheme_.partitions;
+	common::AppendToFile(Tmp_.Block(srcInterval, dstInterval).string(),
+	                     Arena_.data() + block * CapacityEdges_,
+	                     Counts_[block] * common::kEdgeBytes);
+	Counts_[block] = 0;
 }
 
 BlockAssembler::BlockAssembler(const grid::PartitionScheme& scheme,
