@@ -1,6 +1,7 @@
 #include "layout.hpp"
 
 #include <format>
+#include <utility>
 
 namespace lr::grid {
 
@@ -15,68 +16,50 @@ constexpr std::string_view kMetaFileName = "meta";
 
 } // namespace
 
-DegreesDir::DegreesDir(std::filesystem::path path) : Path_(std::move(path)) {}
+Directory::Directory(std::filesystem::path path) : Path_(std::move(path)) {}
 
-const std::filesystem::path& DegreesDir::Path() const {
+const std::filesystem::path& Directory::Path() const {
 	return Path_;
 }
 
 std::filesystem::path DegreesDir::Degrees(uint32_t interval) const {
-	return Path_ / std::format("{}.bin", interval);
-}
-
-PresentDir::PresentDir(std::filesystem::path path) : Path_(std::move(path)) {}
-
-const std::filesystem::path& PresentDir::Path() const {
-	return Path_;
+	return Path() / std::format("{}.bin", interval);
 }
 
 std::filesystem::path PresentDir::Present(uint32_t interval) const {
-	return Path_ / std::format("{}.bin", interval);
-}
-
-TmpDir::TmpDir(std::filesystem::path path) : Path_(std::move(path)) {}
-
-const std::filesystem::path& TmpDir::Path() const {
-	return Path_;
+	return Path() / std::format("{}.bin", interval);
 }
 
 std::filesystem::path TmpDir::Block(uint32_t srcInterval, uint32_t dstInterval) const {
-	return Path_ / std::format("b_{}_{}.raw", srcInterval, dstInterval);
-}
-
-WorkdirRoot::WorkdirRoot(std::filesystem::path path) : Path_(std::move(path)) {}
-
-const std::filesystem::path& WorkdirRoot::Path() const {
-	return Path_;
+	return Path() / std::format("b_{}_{}.raw", srcInterval, dstInterval);
 }
 
 DegreesDir WorkdirRoot::DegreesDir() const {
-	return grid::DegreesDir(Path_ / kDegreesDirName);
+	return grid::DegreesDir(Path() / kDegreesDirName);
 }
 
 PresentDir WorkdirRoot::PresentDir() const {
-	return grid::PresentDir(Path_ / kPresentDirName);
+	return grid::PresentDir(Path() / kPresentDirName);
 }
 
 TmpDir WorkdirRoot::TmpDir() const {
-	return grid::TmpDir(Path_ / kTmpDirName);
+	return grid::TmpDir(Path() / kTmpDirName);
 }
 
 std::filesystem::path WorkdirRoot::BlocksBin() const {
-	return Path_ / kBlocksBinName;
+	return Path() / kBlocksBinName;
 }
 
 std::filesystem::path WorkdirRoot::BlocksIdx() const {
-	return Path_ / kBlocksIdxName;
+	return Path() / kBlocksIdxName;
 }
 
 std::filesystem::path WorkdirRoot::MetaFile() const {
-	return Path_ / kMetaFileName;
+	return Path() / kMetaFileName;
 }
 
 std::filesystem::path WorkdirRoot::RankFile(uint32_t side) const {
-	return Path_ / std::format("rank_{}.bin", side == 0 ? "a" : "b");
+	return Path() / std::format("rank_{}.bin", side == 0 ? "a" : "b");
 }
 
 WorkdirLayout::WorkdirLayout(std::filesystem::path workdir) : Workdir_(std::move(workdir)) {}

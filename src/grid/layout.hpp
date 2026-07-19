@@ -5,44 +5,41 @@
 
 namespace lr::grid {
 
-class DegreesDir {
+class Directory {
 public:
-	explicit DegreesDir(std::filesystem::path path);
+	explicit Directory(std::filesystem::path path);
 
 	const std::filesystem::path& Path() const;
+
+private:
+	std::filesystem::path Path_;
+};
+
+class DegreesDir : public Directory {
+public:
+	using Directory::Directory;
+
 	std::filesystem::path Degrees(uint32_t interval) const;
-
-private:
-	std::filesystem::path Path_;
 };
 
-class PresentDir {
+class PresentDir : public Directory {
 public:
-	explicit PresentDir(std::filesystem::path path);
+	using Directory::Directory;
 
-	const std::filesystem::path& Path() const;
 	std::filesystem::path Present(uint32_t interval) const;
-
-private:
-	std::filesystem::path Path_;
 };
 
-class TmpDir {
+class TmpDir : public Directory {
 public:
-	explicit TmpDir(std::filesystem::path path);
+	using Directory::Directory;
 
-	const std::filesystem::path& Path() const;
 	std::filesystem::path Block(uint32_t srcInterval, uint32_t dstInterval) const;
-
-private:
-	std::filesystem::path Path_;
 };
 
-class WorkdirRoot {
+class WorkdirRoot : public Directory {
 public:
-	explicit WorkdirRoot(std::filesystem::path path);
+	using Directory::Directory;
 
-	const std::filesystem::path& Path() const;
 	DegreesDir DegreesDir() const;
 	PresentDir PresentDir() const;
 	TmpDir TmpDir() const;
@@ -50,9 +47,6 @@ public:
 	std::filesystem::path BlocksIdx() const;
 	std::filesystem::path MetaFile() const;
 	std::filesystem::path RankFile(uint32_t side) const;
-
-private:
-	std::filesystem::path Path_;
 };
 
 class WorkdirLayout {
