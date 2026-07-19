@@ -1,5 +1,6 @@
 #include "aligned_io.hpp"
 
+#include <common/core/constants.hpp>
 #include <common/core/size_literals.hpp>
 
 #include <fcntl.h>
@@ -19,7 +20,6 @@ namespace {
 
 constexpr static mode_t kFileMode = 0644;
 constexpr static size_t kZeroPadBufferBytes = 4096;
-constexpr static uint64_t kWritebackChunkBytes = 8_MiB;
 
 void SyncRangeAndDrop(int fd, uint64_t offsetBytes, uint64_t bytes) {
 #if defined(__linux__)

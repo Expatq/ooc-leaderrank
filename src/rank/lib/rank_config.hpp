@@ -11,6 +11,7 @@ struct RankConfig {
 	uint64_t budgetBytes = 0;
 	double eps = 0.0;
 	uint32_t maxIterations = 0;
+	uint32_t threads = 0;
 };
 
 } // namespace lr::rank

@@ -5,4 +5,6 @@ lr_library(lrcore SOURCES
 	csv/csv_reader.cpp
 	io/aligned_io.cpp
 	io/bitmap.cpp
-	io/peak_rss.cpp)
+	io/peak_rss.cpp
+	thread/thread_pool.cpp
+	DEPS Threads::Threads)

@@ -14,6 +14,16 @@ inline constexpr uint64_t kMaxIoChunkBytes = 4_MiB;
 inline constexpr uint64_t kUsableNumerator = 85;
 inline constexpr uint64_t kUsableDenominator = 100;
 
+inline constexpr uint64_t kWorkerStackBytes = 256_KiB;
+inline constexpr uint64_t kParseBufferBytes = 256_KiB;
+inline constexpr uint64_t kParseAdviseBytes = 8_MiB;
+inline constexpr uint64_t kScanChunkBytes = 64_MiB;
+inline constexpr uint64_t kWritebackChunkBytes = 8_MiB;
+inline constexpr uint32_t kReduceChunkVertices = 16'384;
+inline constexpr uint32_t kCsvFormatChunkVertices = 16'384;
+inline constexpr uint64_t kCsvLineBytes = 32;
+inline constexpr uint64_t kParallelSortMinEdges = 65'536;
+
 inline constexpr uint64_t kColumnBytesPerVertex = 20;
 inline constexpr uint64_t kRankBytesPerVertex = 8;
 inline constexpr uint64_t kDegreeBytesPerVertex = 4;

@@ -18,8 +18,13 @@ uint64_t CeilDiv(uint64_t dividend, uint64_t divisor) {
 
 bool SortArenaFits(uint64_t vertexCount, uint64_t edgesRaw, uint64_t usableBytes, uint64_t partitions) {
 	using Uint128 = unsigned __int128;
-	const Uint128 arena = Uint128(common::kEdgeBytes) * edgesRaw + Uint128(common::kDegreeBytesPerVertex) * vertexCount * partitions;
-	return arena <= Uint128(usableBytes) * partitions * partitions;
+	if (usableBytes <= common::kWritebackChunkBytes) {
+		return false;
+	}
+	const Uint128 arena = Uint128(2) * common::kEdgeBytes * edgesRaw +
+	                      Uint128(common::kDegreeBytesPerVertex) * vertexCount * partitions +
+	                      (Uint128(vertexCount) * partitions + 7) / 8;
+	return arena <= Uint128(usableBytes - common::kWritebackChunkBytes) * partitions * partitions;
 }
 
 } // namespace
@@ -99,11 +104,12 @@ uint64_t PartitionPlanner::IoChunkBytes() const {
 
 uint64_t PartitionPlanner::UsableBytes() const {
 	const uint64_t gross = common::kUsableNumerator * BudgetBytes_ / common::kUsableDenominator;
-	const uint64_t ioBuffers = 2 * uint64_t{Threads_} * IoChunkBytes();
-	if (gross <= ioBuffers) {
+	const uint64_t perThreadBytes = 2 * IoChunkBytes() + common::kWorkerStackBytes + common::kParseBufferBytes;
+	const uint64_t overheadBytes = uint64_t{Threads_} * perThreadBytes;
+	if (gross <= overheadBytes) {
 		return 0;
 	}
-	return gross - ioBuffers;
+	return gross - overheadBytes;
 }
 
 uint64_t PartitionPlanner::ChoosePartitions(uint64_t vertexCount, uint64_t edgesRaw) const {

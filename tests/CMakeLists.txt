@@ -19,6 +19,8 @@ lr_executable(lr-tests SOURCES
 	unit/meta_test.cpp
 	unit/partition_test.cpp
 	unit/peak_rss_test.cpp
+	unit/prepare_job_test.cpp
+	unit/thread_pool_test.cpp
 	DEPS lrcore lrgrid lrprepare lrrank GTest::gtest_main)
 
 include(GoogleTest)
