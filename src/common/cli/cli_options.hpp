@@ -81,8 +81,7 @@ private:
 			return std::string(text);
 		} else if constexpr (std::is_integral_v<T> && !std::is_same_v<T, bool>) {
 			T value{};
-			const auto [end, errCode] =
-			    std::from_chars(text.data(), text.data() + text.size(), value);
+			const auto [end, errCode] = std::from_chars(text.data(), text.data() + text.size(), value);
 			if (errCode != std::errc{} || end != text.data() + text.size()) {
 				throw std::runtime_error("not a valid integer");
 			}

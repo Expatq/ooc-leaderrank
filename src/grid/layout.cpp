@@ -1,18 +1,26 @@
 #include "layout.hpp"
 
+#include "block_index.hpp"
+#include "partition.hpp"
+
+#include <common/core/constants.hpp>
+#include <common/io/aligned_io.hpp>
+
+#include <algorithm>
 #include <format>
+#include <stdexcept>
 #include <utility>
 
 namespace lr::grid {
 
 namespace {
 
-constexpr std::string_view kDegreesDirName = "deg";
-constexpr std::string_view kPresentDirName = "present";
-constexpr std::string_view kTmpDirName = "tmp";
-constexpr std::string_view kBlocksBinName = "blocks.bin";
-constexpr std::string_view kBlocksIdxName = "blocks.idx";
-constexpr std::string_view kMetaFileName = "meta";
+constexpr static std::string_view kDegreesDirName = "deg";
+constexpr static std::string_view kPresentDirName = "present";
+constexpr static std::string_view kTmpDirName = "tmp";
+constexpr static std::string_view kBlocksBinName = "blocks.bin";
+constexpr static std::string_view kBlocksIdxName = "blocks.idx";
+constexpr static std::string_view kMetaFileName = "meta";
 
 } // namespace
 
@@ -62,10 +70,31 @@ std::filesystem::path WorkdirRoot::RankFile(uint32_t side) const {
 	return Path() / std::format("rank_{}.bin", side == 0 ? "a" : "b");
 }
 
-WorkdirLayout::WorkdirLayout(std::filesystem::path workdir) : Workdir_(std::move(workdir)) {}
-
-WorkdirRoot WorkdirLayout::Root() const {
-	return WorkdirRoot(Workdir_);
+void WorkdirRoot::Validate(const PartitionScheme& scheme) const {
+	const BlockIndex index = BlockIndex::Load(scheme, *this);
+	uint64_t blocksBinNeedBytes = 0;
+	for (uint32_t srcInterval = 0; srcInterval < scheme.partitions; ++srcInterval) {
+		for (uint32_t dstInterval = 0; dstInterval < scheme.partitions; ++dstInterval) {
+			const BlockRef& ref = index.At(srcInterval, dstInterval);
+			blocksBinNeedBytes = std::max(blocksBinNeedBytes, ref.offsetBytes + ref.edgeCount * common::kEdgeBytes);
+		}
+	}
+	const common::InputFile blocksBin(BlocksBin());
+	if (blocksBin.SizeBytes() < blocksBinNeedBytes) {
+		throw std::runtime_error(
+		    std::format("{}: size is {} bytes, blocks.idx expects at least {}",
+		                BlocksBin().string(), blocksBin.SizeBytes(), blocksBinNeedBytes));
+	}
+	for (uint32_t interval = 0; interval < scheme.partitions; ++interval) {
+		const std::filesystem::path degPath = DegreesDir().Degrees(interval);
+		const common::InputFile degFile(degPath);
+		const uint64_t expectedBytes = uint64_t{scheme.IntervalLength(interval)} * common::kDegreeBytesPerVertex;
+		if (degFile.SizeBytes() != expectedBytes) {
+			throw std::runtime_error(
+			    std::format("{}: size is {} bytes, expected {}",
+			                degPath.string(), degFile.SizeBytes(), expectedBytes));
+		}
+	}
 }
 
 } // namespace lr::grid

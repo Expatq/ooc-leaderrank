@@ -1,28 +1,21 @@
 #pragma once
 
-#include "engine.hpp"
+#include "rank_config.hpp"
+#include "rank_result.hpp"
 
-#include <cstdint>
-#include <string>
+#include <iosfwd>
 
 namespace lr::rank {
 
-struct RankConfig {
-	std::string workdir;
-	std::string outPath;
-	uint64_t budgetBytes = 0;
-	double eps = 0.0;
-	uint32_t maxIterations = 0;
-};
-
 class RankJob {
 public:
-	explicit RankJob(RankConfig config);
+	RankJob(RankConfig config, std::ostream* progress);
 
 	RankResult Run();
 
 private:
 	RankConfig Config_;
+	std::ostream* Progress_;
 };
 
 } // namespace lr::rank

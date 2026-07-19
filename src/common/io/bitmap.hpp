@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstdint>
-#include <string>
+#include <filesystem>
 #include <vector>
 
 namespace lr::common {
@@ -16,8 +16,8 @@ public:
 	void OrWith(const Bitmap& other);
 	uint32_t BitCount() const { return BitCount_; }
 
-	static Bitmap Load(const std::string& path, uint32_t bitCount);
-	void Save(const std::string& path) const;
+	static Bitmap Load(const std::filesystem::path& path, uint32_t bitCount);
+	void Save(const std::filesystem::path& path) const;
 
 private:
 	uint32_t BitCount_;

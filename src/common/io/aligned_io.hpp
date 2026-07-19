@@ -1,13 +1,14 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 
 namespace lr::common {
 
 class InputFile {
 public:
-	explicit InputFile(const std::string& path);
+	explicit InputFile(const std::filesystem::path& path);
 	~InputFile();
 
 	InputFile(const InputFile&) = delete;
@@ -26,7 +27,7 @@ private:
 
 class RandomAccessFile {
 public:
-	RandomAccessFile(const std::string& path, uint64_t sizeBytes);
+	RandomAccessFile(const std::filesystem::path& path, uint64_t sizeBytes);
 	~RandomAccessFile();
 
 	RandomAccessFile(const RandomAccessFile&) = delete;
@@ -44,7 +45,7 @@ private:
 
 class OutputFile {
 public:
-	explicit OutputFile(const std::string& path);
+	explicit OutputFile(const std::filesystem::path& path);
 	~OutputFile();
 
 	OutputFile(const OutputFile&) = delete;
@@ -63,6 +64,6 @@ private:
 	uint64_t SyncedBytes_;
 };
 
-void AppendToFile(const std::string& path, const void* src, size_t bytes);
+void AppendToFile(const std::filesystem::path& path, const void* src, size_t bytes);
 
 } // namespace lr::common

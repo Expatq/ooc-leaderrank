@@ -17,20 +17,18 @@ namespace lr::common {
 
 namespace {
 
-constexpr mode_t kFileMode = 0644;
-constexpr size_t kZeroPadBufferBytes = 4096;
-constexpr uint64_t kWritebackChunkBytes = 8_MiB;
+constexpr static mode_t kFileMode = 0644;
+constexpr static size_t kZeroPadBufferBytes = 4096;
+constexpr static uint64_t kWritebackChunkBytes = 8_MiB;
 
 void SyncRangeAndDrop(int fd, uint64_t offsetBytes, uint64_t bytes) {
 #if defined(__linux__)
-	const int synced = ::sync_file_range(
-	    fd, static_cast<off_t>(offsetBytes), static_cast<off_t>(bytes),
-	    SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_AFTER);
+	constexpr static int kSyncFlags = SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_AFTER;
+	const int synced = ::sync_file_range(fd, static_cast<off_t>(offsetBytes), static_cast<off_t>(bytes), kSyncFlags);
 	if (synced != 0) {
 		::fdatasync(fd);
 	}
-	::posix_fadvise(fd, static_cast<off_t>(offsetBytes), static_cast<off_t>(bytes),
-	                POSIX_FADV_DONTNEED);
+	::posix_fadvise(fd, static_cast<off_t>(offsetBytes), static_cast<off_t>(bytes), POSIX_FADV_DONTNEED);
 #else
 	(void)fd;
 	(void)offsetBytes;
@@ -40,8 +38,7 @@ void SyncRangeAndDrop(int fd, uint64_t offsetBytes, uint64_t bytes) {
 
 void DropReadCache(int fd, uint64_t offsetBytes, uint64_t bytes) {
 #if defined(__linux__)
-	::posix_fadvise(fd, static_cast<off_t>(offsetBytes), static_cast<off_t>(bytes),
-	                POSIX_FADV_DONTNEED);
+	::posix_fadvise(fd, static_cast<off_t>(offsetBytes), static_cast<off_t>(bytes), POSIX_FADV_DONTNEED);
 #else
 	(void)fd;
 	(void)offsetBytes;
@@ -63,8 +60,7 @@ void ReadExact(int fd, const std::string& path, uint64_t offsetBytes, void* dst,
 			FailErrno(path, "pread");
 		}
 		if (got == 0) {
-			throw std::runtime_error(
-			    std::format("{}: unexpected end of file at offset {}", path, offset));
+			throw std::runtime_error(std::format("{}: unexpected end of file at offset {}", path, offset));
 		}
 		cursor += got;
 		offset += static_cast<uint64_t>(got);
@@ -72,8 +68,7 @@ void ReadExact(int fd, const std::string& path, uint64_t offsetBytes, void* dst,
 	}
 }
 
-void WriteExact(int fd, const std::string& path, uint64_t offsetBytes, const void* src,
-                size_t bytes) {
+void WriteExact(int fd, const std::string& path, uint64_t offsetBytes, const void* src, size_t bytes) {
 	const char* cursor = static_cast<const char*>(src);
 	size_t remaining = bytes;
 	uint64_t offset = offsetBytes;
@@ -90,13 +85,14 @@ void WriteExact(int fd, const std::string& path, uint64_t offsetBytes, const voi
 
 } // namespace
 
-InputFile::InputFile(const std::string& path) : Fd_(::open(path.c_str(), O_RDONLY)), Path_(path) {
+InputFile::InputFile(const std::filesystem::path& path)
+    : Fd_(::open(path.c_str(), O_RDONLY)), Path_(path.string()) {
 	if (Fd_ < 0) {
-		FailErrno(path, "open");
+		FailErrno(Path_, "open");
 	}
 	struct stat info{};
 	if (::fstat(Fd_, &info) != 0) {
-		FailErrno(path, "fstat");
+		FailErrno(Path_, "fstat");
 	}
 	SizeBytes_ = static_cast<uint64_t>(info.st_size);
 }
@@ -119,13 +115,13 @@ void InputFile::AdviseDontNeed(uint64_t offsetBytes, uint64_t bytes) const {
 	DropReadCache(Fd_, offsetBytes, bytes);
 }
 
-RandomAccessFile::RandomAccessFile(const std::string& path, uint64_t sizeBytes)
-    : Fd_(::open(path.c_str(), O_RDWR | O_CREAT, kFileMode)), Path_(path) {
+RandomAccessFile::RandomAccessFile(const std::filesystem::path& path, uint64_t sizeBytes)
+    : Fd_(::open(path.c_str(), O_RDWR | O_CREAT, kFileMode)), Path_(path.string()) {
 	if (Fd_ < 0) {
-		FailErrno(path, "open");
+		FailErrno(Path_, "open");
 	}
 	if (::ftruncate(Fd_, static_cast<off_t>(sizeBytes)) != 0) {
-		FailErrno(path, "ftruncate");
+		FailErrno(Path_, "ftruncate");
 	}
 }
 
@@ -149,11 +145,11 @@ void RandomAccessFile::AdviseDontNeed(uint64_t offsetBytes, uint64_t bytes) cons
 	DropReadCache(Fd_, offsetBytes, bytes);
 }
 
-OutputFile::OutputFile(const std::string& path)
-    : Fd_(::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, kFileMode)), Path_(path),
+OutputFile::OutputFile(const std::filesystem::path& path)
+    : Fd_(::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, kFileMode)), Path_(path.string()),
       OffsetBytes_(0), SyncedBytes_(0) {
 	if (Fd_ < 0) {
-		FailErrno(path, "open");
+		FailErrno(Path_, "open");
 	}
 }
 
@@ -184,10 +180,10 @@ void OutputFile::MaybeWriteback() {
 	}
 }
 
-void AppendToFile(const std::string& path, const void* src, size_t bytes) {
+void AppendToFile(const std::filesystem::path& path, const void* src, size_t bytes) {
 	const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND, kFileMode);
 	if (fd < 0) {
-		FailErrno(path, "open");
+		FailErrno(path.string(), "open");
 	}
 	const char* cursor = static_cast<const char*>(src);
 	size_t remaining = bytes;
@@ -195,7 +191,7 @@ void AppendToFile(const std::string& path, const void* src, size_t bytes) {
 		const ssize_t put = ::write(fd, cursor, remaining);
 		if (put < 0) {
 			::close(fd);
-			FailErrno(path, "write");
+			FailErrno(path.string(), "write");
 		}
 		cursor += put;
 		remaining -= static_cast<size_t>(put);
@@ -204,7 +200,7 @@ void AppendToFile(const std::string& path, const void* src, size_t bytes) {
 	::sync_file_range(fd, 0, 0, SYNC_FILE_RANGE_WRITE);
 #endif
 	if (::close(fd) != 0) {
-		FailErrno(path, "close");
+		FailErrno(path.string(), "close");
 	}
 }
 

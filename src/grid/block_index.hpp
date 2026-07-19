@@ -1,9 +1,9 @@
 #pragma once
 
+#include "layout.hpp"
 #include "partition.hpp"
 
 #include <cstdint>
-#include <filesystem>
 #include <vector>
 
 namespace lr::grid {
@@ -16,9 +16,9 @@ struct BlockRef {
 class BlockIndex {
 public:
 	explicit BlockIndex(const PartitionScheme& scheme);
-	static BlockIndex Load(const std::filesystem::path& path, const PartitionScheme& scheme);
+	static BlockIndex Load(const PartitionScheme& scheme, const WorkdirRoot& root);
 
-	void Save(const std::filesystem::path& path) const;
+	void Save(const WorkdirRoot& root) const;
 	const BlockRef& At(uint32_t srcInterval, uint32_t dstInterval) const;
 	BlockRef* MutableAt(uint32_t srcInterval, uint32_t dstInterval);
 	uint64_t SizeBytes() const;

@@ -10,9 +10,10 @@ namespace lr::grid {
 BlockIndex::BlockIndex(const PartitionScheme& scheme)
     : Scheme_(scheme), Refs_(scheme.BlockCount(), BlockRef{0, 0}) {}
 
-BlockIndex BlockIndex::Load(const std::filesystem::path& path, const PartitionScheme& scheme) {
+BlockIndex BlockIndex::Load(const PartitionScheme& scheme, const WorkdirRoot& root) {
 	BlockIndex index(scheme);
-	const common::InputFile file(path.string());
+	const std::filesystem::path path = root.BlocksIdx();
+	const common::InputFile file(path);
 	if (file.SizeBytes() != index.SizeBytes()) {
 		throw std::runtime_error(std::format("{}: size is {} bytes, expected {}", path.string(), file.SizeBytes(), index.SizeBytes()));
 	}
@@ -20,8 +21,8 @@ BlockIndex BlockIndex::Load(const std::filesystem::path& path, const PartitionSc
 	return index;
 }
 
-void BlockIndex::Save(const std::filesystem::path& path) const {
-	common::OutputFile file(path.string());
+void BlockIndex::Save(const WorkdirRoot& root) const {
+	common::OutputFile file(root.BlocksIdx());
 	file.Append(Refs_.data(), Refs_.size() * sizeof(BlockRef));
 }
 

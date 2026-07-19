@@ -4,11 +4,18 @@
 
 namespace lr::grid {
 
+struct ByteRange {
+	uint64_t offsetBytes;
+	uint64_t bytes;
+};
+
 class PartitionScheme {
 public:
 	uint32_t maxId;
 	uint32_t partitions;
 	uint32_t intervalSize;
+
+	static PartitionScheme Create(uint32_t maxId, uint32_t partitions);
 
 	uint64_t VertexCount() const;
 	uint64_t BlockCount() const;
@@ -16,6 +23,7 @@ public:
 	uint32_t IntervalBase(uint32_t interval) const;
 	uint32_t IntervalLength(uint32_t interval) const;
 	uint64_t BlockPosition(uint32_t srcInterval, uint32_t dstInterval) const;
+	ByteRange RankByteRange(uint32_t interval) const;
 };
 
 class PartitionPlanner {

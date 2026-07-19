@@ -3,19 +3,35 @@
 #include <charconv>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 namespace lr::grid {
 
 namespace {
 
-constexpr char kKeyValueSeparator = '=';
+constexpr static char kKeyValueSeparator = '=';
 
-uint64_t GetValue(const std::map<std::string, uint64_t, std::less<>>& values,
-                  const std::string& path, std::string_view key) {
+template <typename MetaRef, typename Action>
+void VisitFields(MetaRef* meta, Action action) {
+	action("transpose", &meta->transpose);
+	action("threads_planned", &meta->threadsPlanned);
+	action("max_id", &meta->scheme.maxId);
+	action("partitions", &meta->scheme.partitions);
+	action("vertices", &meta->vertices);
+	action("edges_raw", &meta->edgesRaw);
+	action("edges", &meta->edges);
+	action("dropped_self_loops", &meta->droppedSelfLoops);
+	action("dropped_duplicates", &meta->droppedDuplicates);
+	action("max_out_degree", &meta->maxOutDegree);
+	action("max_in_degree", &meta->maxInDegree);
+}
+
+uint64_t GetValue(const std::map<std::string, uint64_t, std::less<>>& values, const std::string& path, std::string_view key) {
 	const auto found = values.find(key);
 	if (found == values.end()) {
 		throw std::runtime_error(std::format("{}: missing key {}", path, key));
@@ -50,18 +66,20 @@ Meta Meta::Load(const WorkdirRoot& workdir) {
 		values.emplace(line.substr(0, cut), value);
 	}
 	Meta meta;
-	meta.transpose = static_cast<uint32_t>(GetValue(values, path, "transpose"));
-	meta.threadsPlanned = static_cast<uint32_t>(GetValue(values, path, "threads_planned"));
-	meta.maxId = static_cast<uint32_t>(GetValue(values, path, "max_id"));
-	meta.intervalSize = static_cast<uint32_t>(GetValue(values, path, "interval_size"));
-	meta.partitions = static_cast<uint32_t>(GetValue(values, path, "partitions"));
-	meta.vertices = GetValue(values, path, "vertices");
-	meta.edgesRaw = GetValue(values, path, "edges_raw");
-	meta.edges = GetValue(values, path, "edges");
-	meta.droppedSelfLoops = GetValue(values, path, "dropped_self_loops");
-	meta.droppedDuplicates = GetValue(values, path, "dropped_duplicates");
-	meta.maxOutDegree = static_cast<uint32_t>(GetValue(values, path, "max_out_degree"));
-	meta.maxInDegree = static_cast<uint32_t>(GetValue(values, path, "max_in_degree"));
+	VisitFields(&meta, [&values, &path](std::string_view key, auto* field) {
+		using Field = std::remove_reference_t<decltype(*field)>;
+		const uint64_t value = GetValue(values, path, key);
+		if constexpr (!std::is_same_v<Field, uint64_t>) {
+			if (value > std::numeric_limits<Field>::max()) {
+				throw std::runtime_error(std::format("{}: value out of range for {}", path, key));
+			}
+		}
+		*field = static_cast<Field>(value);
+	});
+	if (meta.scheme.partitions == 0) {
+		throw std::runtime_error(std::format("{}: partitions must be positive", path));
+	}
+	meta.scheme = PartitionScheme::Create(meta.scheme.maxId, meta.scheme.partitions);
 	return meta;
 }
 
@@ -71,25 +89,12 @@ void Meta::Save(const WorkdirRoot& workdir) const {
 	if (!output) {
 		throw std::runtime_error(std::format("cannot create {}", path));
 	}
-	output << std::format("transpose={}\n", transpose);
-	output << std::format("threads_planned={}\n", threadsPlanned);
-	output << std::format("max_id={}\n", maxId);
-	output << std::format("interval_size={}\n", intervalSize);
-	output << std::format("partitions={}\n", partitions);
-	output << std::format("vertices={}\n", vertices);
-	output << std::format("edges_raw={}\n", edgesRaw);
-	output << std::format("edges={}\n", edges);
-	output << std::format("dropped_self_loops={}\n", droppedSelfLoops);
-	output << std::format("dropped_duplicates={}\n", droppedDuplicates);
-	output << std::format("max_out_degree={}\n", maxOutDegree);
-	output << std::format("max_in_degree={}\n", maxInDegree);
+	VisitFields(this, [&output](std::string_view key, const auto* field) {
+		output << std::format("{}={}\n", key, *field);
+	});
 	if (!output.flush()) {
 		throw std::runtime_error(std::format("cannot write {}", path));
 	}
-}
-
-PartitionScheme Meta::Scheme() const {
-	return PartitionScheme{maxId, partitions, intervalSize};
 }
 
 } // namespace lr::grid
