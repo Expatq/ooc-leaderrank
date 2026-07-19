@@ -18,16 +18,22 @@ namespace {
 constexpr static uint32_t kCurrentSide = 0;
 constexpr static uint32_t kNextSide = 1;
 
+uint32_t ReduceChunkCount(uint32_t length) {
+	return (length + common::kReduceChunkVertices - 1) / common::kReduceChunkVertices;
+}
+
 } // namespace
 
-Engine::Engine(const grid::WorkdirRoot& workdir, const RankConfig& config, std::ostream* progress)
-    : Workdir_(workdir), Meta_(grid::Meta::Load(workdir)), Scheme_(Meta_.scheme), Eps_(config.eps),
-      MaxIterations_(config.maxIterations), Progress_(progress), GroundScore_(0.0) {
+Engine::Engine(const grid::WorkdirRoot& workdir, const grid::Meta& meta, const RankConfig& config,
+               common::ThreadPool* pool, std::ostream* progress)
+    : Workdir_(workdir), Meta_(meta), Scheme_(meta.scheme), Eps_(config.eps),
+      MaxIterations_(config.maxIterations), Pool_(pool), Progress_(progress), GroundScore_(0.0) {
 	ValidateWorkdir();
 
 	const grid::PartitionPlanner planner(config.budgetBytes, Meta_.threadsPlanned);
 	ChunkBytes_ = planner.IoChunkBytes();
 	const uint64_t intervalSize = Scheme_.intervalSize;
+	const uint64_t partialCount = ReduceChunkCount(Scheme_.intervalSize);
 
 	common::MemoryBudget budget(config.budgetBytes);
 	budget.Reserve("source contributions", common::kRankBytesPerVertex * intervalSize);
@@ -36,10 +42,15 @@ Engine::Engine(const grid::WorkdirRoot& workdir, const RankConfig& config, std::
 	budget.Reserve("column bitmap", intervalSize / 8 + 1);
 	budget.Reserve("io chunk", ChunkBytes_);
 	budget.Reserve("block index", Scheme_.BlockCount() * sizeof(grid::BlockRef));
+	budget.Reserve("reduction partials", partialCount * (sizeof(double) + sizeof(ColumnSums)));
+	budget.Reserve("csv format wave", uint64_t{Meta_.threadsPlanned} * common::kCsvFormatChunkVertices * common::kCsvLineBytes);
 
 	Contrib_.resize(intervalSize);
 	Accumulator_.resize(intervalSize);
 	Degrees_.resize(intervalSize);
+	SegmentBounds_.resize(uint64_t{Pool_->Threads()} + 1);
+	GroundPartials_.resize(partialCount);
+	ColumnPartials_.resize(partialCount);
 	Index_ = std::make_unique<grid::BlockIndex>(grid::BlockIndex::Load(Scheme_, Workdir_));
 }
 
@@ -77,10 +88,6 @@ RankResult Engine::Run() {
 	result.groundScore = GroundScore_;
 	result.rankFileSide = currentSide;
 	return result;
-}
-
-const grid::Meta& Engine::GetMeta() const {
-	return Meta_;
 }
 
 void Engine::ValidateWorkdir() const {
@@ -135,21 +142,35 @@ double Engine::AccumulateColumn(grid::BlockReader* reader, const common::RandomA
 		const common::InputFile degFile(Workdir_.DegreesDir().Degrees(srcInterval));
 		degFile.ReadAt(0, Degrees_.data(), uint64_t{rowLength} * common::kDegreeBytesPerVertex);
 		degFile.AdviseDontNeed(0, uint64_t{rowLength} * common::kDegreeBytesPerVertex);
-		for (uint32_t i = 0; i < rowLength; ++i) {
-			Contrib_[i] /= static_cast<double>(Degrees_[i]) + 1.0;
-		}
+
+		Pool_->ParallelFor(ReduceChunkCount(rowLength), [this, rowLength](uint32_t, uint64_t piece) {
+			const uint32_t begin = static_cast<uint32_t>(piece) * common::kReduceChunkVertices;
+			const uint32_t end = std::min(begin + common::kReduceChunkVertices, rowLength);
+			double pieceSum = 0.0;
+			for (uint32_t i = begin; i < end; ++i) {
+				Contrib_[i] /= static_cast<double>(Degrees_[i]) + 1.0;
+				pieceSum += Contrib_[i];
+			}
+			GroundPartials_[piece] = pieceSum;
+		});
 		if (dstInterval == 0) {
-			for (uint32_t i = 0; i < rowLength; ++i) {
-				ground += Contrib_[i];
+			const uint32_t pieces = ReduceChunkCount(rowLength);
+			for (uint32_t piece = 0; piece < pieces; ++piece) {
+				ground += GroundPartials_[piece];
 			}
 		}
 
 		reader->Open(Index_->At(srcInterval, dstInterval));
 		std::span<const common::Edge> chunk;
 		while (reader->Next(&chunk)) {
-			for (const common::Edge& edge : chunk) {
-				Accumulator_[edge.dst - columnBase] += Contrib_[edge.src - rowBase];
-			}
+			BuildDstSegments(chunk);
+			Pool_->ParallelFor(Pool_->Threads(), [this, chunk, columnBase, rowBase](uint32_t, uint64_t segment) {
+				const uint64_t begin = SegmentBounds_[segment];
+				const uint64_t end = SegmentBounds_[segment + 1];
+				for (uint64_t i = begin; i < end; ++i) {
+					Accumulator_[chunk[i].dst - columnBase] += Contrib_[chunk[i].src - rowBase];
+				}
+			});
 		}
 	}
 	return ground;
@@ -158,23 +179,51 @@ double Engine::AccumulateColumn(grid::BlockReader* reader, const common::RandomA
 Engine::ColumnSums Engine::FinalizeColumn(const common::RandomAccessFile& current, common::RandomAccessFile* next, uint32_t dstInterval, double groundShare) {
 	const uint32_t columnLength = Scheme_.IntervalLength(dstInterval);
 	const common::Bitmap present = common::Bitmap::Load(Workdir_.PresentDir().Present(dstInterval), columnLength);
-	for (uint32_t i = 0; i < columnLength; ++i) {
-		if (present.Test(i)) {
-			Accumulator_[i] += groundShare;
-		}
-	}
-
 	const grid::ByteRange column = Scheme_.RankByteRange(dstInterval);
 	current.ReadAt(column.offsetBytes, Contrib_.data(), column.bytes);
 	current.AdviseDontNeed(column.offsetBytes, column.bytes);
-	ColumnSums sums{0.0, 0.0};
-	for (uint32_t i = 0; i < columnLength; ++i) {
-		sums.deltaL1 += std::abs(Accumulator_[i] - Contrib_[i]);
-		sums.mass += Accumulator_[i];
+
+	const uint32_t pieces = ReduceChunkCount(columnLength);
+	Pool_->ParallelFor(pieces, [this, &present, columnLength, groundShare](uint32_t, uint64_t piece) {
+		const uint32_t begin = static_cast<uint32_t>(piece) * common::kReduceChunkVertices;
+		const uint32_t end = std::min(begin + common::kReduceChunkVertices, columnLength);
+		ColumnSums pieceSums{0.0, 0.0};
+		for (uint32_t i = begin; i < end; ++i) {
+			if (present.Test(i)) {
+				Accumulator_[i] += groundShare;
+			}
+			pieceSums.deltaL1 += std::abs(Accumulator_[i] - Contrib_[i]);
+			pieceSums.mass += Accumulator_[i];
+		}
+		ColumnPartials_[piece] = pieceSums;
+	});
+
+	ColumnSums total{0.0, 0.0};
+	for (uint32_t piece = 0; piece < pieces; ++piece) {
+		total.deltaL1 += ColumnPartials_[piece].deltaL1;
+		total.mass += ColumnPartials_[piece].mass;
 	}
 	next->WriteAt(column.offsetBytes, Accumulator_.data(), column.bytes);
 	next->SyncAndDrop(column.offsetBytes, column.bytes);
-	return sums;
+	return total;
+}
+
+void Engine::BuildDstSegments(std::span<const common::Edge> chunk) {
+	const uint64_t count = chunk.size();
+	const uint32_t segments = Pool_->Threads();
+	SegmentBounds_[0] = 0;
+	for (uint32_t k = 1; k < segments; ++k) {
+		uint64_t bound = std::max<uint64_t>(SegmentBounds_[k - 1], count * k / segments);
+		if (bound > 0 && bound < count) {
+			const uint32_t boundaryDst = chunk[bound - 1].dst;
+			const auto runEnd = std::upper_bound(
+			    chunk.begin() + static_cast<int64_t>(bound), chunk.end(), boundaryDst,
+			    [](uint32_t value, const common::Edge& edge) { return value < edge.dst; });
+			bound = static_cast<uint64_t>(runEnd - chunk.begin());
+		}
+		SegmentBounds_[k] = bound;
+	}
+	SegmentBounds_[segments] = count;
 }
 
 void Engine::CheckMassInvariant(const IterationSums& sums, double vertexCount) const {

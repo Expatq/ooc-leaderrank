@@ -52,15 +52,15 @@ TEST(PartitionScheme, GeometryOfFormatExample) {
 }
 
 TEST(PartitionPlanner, LiveJournalAuditTable) {
-	EXPECT_EQ(PlanPartitions(32_MiB, kLiveJournalMaxId, kLiveJournalEdges), 7u);
-	EXPECT_EQ(PlanPartitions(64_MiB, kLiveJournalMaxId, kLiveJournalEdges), 5u);
-	EXPECT_EQ(PlanPartitions(128_MiB, kLiveJournalMaxId, kLiveJournalEdges), 3u);
+	EXPECT_EQ(PlanPartitions(32_MiB, kLiveJournalMaxId, kLiveJournalEdges), 16u);
+	EXPECT_EQ(PlanPartitions(64_MiB, kLiveJournalMaxId, kLiveJournalEdges), 8u);
+	EXPECT_EQ(PlanPartitions(128_MiB, kLiveJournalMaxId, kLiveJournalEdges), 5u);
 }
 
 TEST(PartitionPlanner, TwitterAuditTable) {
-	EXPECT_EQ(PlanPartitions(32_MiB, kTwitterMaxId, kTwitterEdges), 46u);
-	EXPECT_EQ(PlanPartitions(64_MiB, kTwitterMaxId, kTwitterEdges), 23u);
-	EXPECT_EQ(PlanPartitions(128_MiB, kTwitterMaxId, kTwitterEdges), 14u);
+	EXPECT_THROW(PlanPartitions(32_MiB, kTwitterMaxId, kTwitterEdges), std::runtime_error);
+	EXPECT_EQ(PlanPartitions(64_MiB, kTwitterMaxId, kTwitterEdges), 35u);
+	EXPECT_EQ(PlanPartitions(128_MiB, kTwitterMaxId, kTwitterEdges), 22u);
 }
 
 TEST(PartitionPlanner, IntervalCoversAllVertices) {

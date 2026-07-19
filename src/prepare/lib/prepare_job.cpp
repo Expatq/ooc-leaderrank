@@ -1,6 +1,7 @@
 #include "prepare_job.hpp"
 
 #include <common/core/constants.hpp>
+#include <common/thread/thread_pool.hpp>
 #include <grid/layout.hpp>
 #include <grid/meta.hpp>
 
@@ -17,8 +18,9 @@ PrepareJob::PrepareJob(PrepareConfig config, std::ostream* progress)
 
 PrepareReport PrepareJob::Run() {
 	PrepareReport report{};
+	common::ThreadPool pool(Config_.threadsPlanned);
 
-	report.scan = common::EdgeScanner(Config_.edgesPath).Run();
+	report.scan = common::EdgeScanner(Config_.edgesPath, &pool).Run();
 	if (report.scan.edgesRaw == 0) {
 		throw std::runtime_error("input file contains no edges");
 	}
@@ -38,20 +40,19 @@ PrepareReport PrepareJob::Run() {
 	RecreateWorkdir();
 	const grid::WorkdirRoot root(Config_.workdir);
 	{
-		common::CsvEdgeStream stream(Config_.edgesPath, Config_.transpose);
-		EdgeScatterer scatterer(report.scheme, root, planner.UsableBytes());
-		report.scatter = scatterer.Run(&stream);
+		EdgeScatterer scatterer(report.scheme, root, planner.UsableBytes(), &pool);
+		report.scatter = scatterer.Run(Config_.edgesPath, Config_.transpose);
 	}
 	Report(std::format("scatter: edges={} self_loops_dropped={}", report.scatter.edgesWritten, report.scatter.droppedSelfLoops));
 
 	{
-		BlockAssembler assembler(report.scheme, root, planner.UsableBytes());
+		BlockAssembler assembler(report.scheme, root, planner.UsableBytes(), &pool);
 		report.assembly = assembler.Run();
 	}
 	Report(std::format("assemble: duplicates_dropped={} max_in_degree={}", report.assembly.droppedDuplicates, report.assembly.maxInDegree));
 
 	{
-		DegreeBuilder degrees(report.scheme, root, planner.IoChunkBytes());
+		DegreeBuilder degrees(report.scheme, root, planner.IoChunkBytes(), &pool);
 		report.degrees = degrees.Run();
 	}
 	Report(std::format("degrees: vertices={} max_out_degree={}", report.degrees.vertices, report.degrees.maxOutDegree));

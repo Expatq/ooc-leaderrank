@@ -1,11 +1,13 @@
 #include "csv_reader.hpp"
 
 #include <common/core/constants.hpp>
+#include <common/thread/thread_pool.hpp>
 
 #include <algorithm>
 #include <charconv>
+#include <cstring>
 #include <format>
-#include <stdexcept>
+#include <utility>
 
 namespace lr::common {
 
@@ -13,9 +15,11 @@ namespace {
 
 constexpr static char kComma = ',';
 constexpr static char kTab = '\t';
+constexpr static char kNewline = '\n';
 constexpr static char kCommentChar = '#';
 constexpr static char kMinusChar = '-';
 constexpr static std::string_view kStripChars = " \r";
+constexpr static uint64_t kWholeFile = UINT64_MAX;
 
 std::string_view Strip(std::string_view text) {
 	const size_t begin = text.find_first_not_of(kStripChars);
@@ -59,31 +63,153 @@ TwoColumns SplitTwoColumns(std::string_view line) {
 
 } // namespace
 
+CsvChunkError::CsvChunkError(uint64_t offsetBytes, std::string reason)
+    : std::runtime_error(std::format("byte offset {}: {}", offsetBytes, reason)),
+      OffsetBytes_(offsetBytes), Reason_(std::move(reason)) {}
+
+uint64_t CsvChunkError::OffsetBytes() const {
+	return OffsetBytes_;
+}
+
+const std::string& CsvChunkError::Reason() const {
+	return Reason_;
+}
+
 CsvEdgeStream::CsvEdgeStream(const std::filesystem::path& path, bool transpose)
-    : Input_(path), Path_(path.string()), LineNo_(0), HeaderChecked_(false), Transpose_(transpose) {
-	if (!Input_) {
-		throw std::runtime_error(std::format("cannot open {}", Path_));
+    : CsvEdgeStream(path, transpose, 0, kWholeFile, true) {}
+
+uint64_t CsvEdgeStream::DataStartBytes(const std::filesystem::path& path) {
+	CsvEdgeStream stream(path, false);
+	std::string_view line;
+	while (stream.NextLine(&line)) {
+		const std::string_view stripped = Strip(line);
+		if (stripped.empty() || stripped.front() == kCommentChar) {
+			continue;
+		}
+		const TwoColumns columns = SplitTwoColumns(stripped);
+		if (!columns.ok || !LooksLikeNumber(columns.first) || !LooksLikeNumber(columns.second)) {
+			return stream.BufferFileOffset_ + stream.Cursor_;
+		}
+		return stream.LineStartOffset_;
 	}
+	return stream.FileBytes_;
+}
+
+CsvEdgeStream::CsvEdgeStream(const std::filesystem::path& path, bool transpose, uint64_t beginBytes, uint64_t endBytes, bool firstChunk)
+    : File_(path), Path_(path.string()), Transpose_(transpose), FileBytes_(File_.SizeBytes()),
+      BeginBytes_(std::min(beginBytes, FileBytes_)), EndBytes_(std::min(endBytes, FileBytes_)),
+      ChunkMode_(!(BeginBytes_ == 0 && EndBytes_ == FileBytes_ && firstChunk)),
+      HeaderChecked_(!firstChunk), Buffer_(kParseBufferBytes), BufferFileOffset_(BeginBytes_),
+      BufferBytes_(0), Cursor_(0), LineStartOffset_(BeginBytes_), LineNo_(0),
+      AdvisedUntilBytes_(BeginBytes_) {
+	AlignToOwnedLine();
 }
 
 bool CsvEdgeStream::Next(Edge* out) {
-	while (std::getline(Input_, Line_)) {
-		++LineNo_;
-		const std::string_view line = Strip(Line_);
-		if (line.empty() || line.front() == kCommentChar) {
+	std::string_view line;
+	while (NextLine(&line)) {
+		const std::string_view stripped = Strip(line);
+		if (stripped.empty() || stripped.front() == kCommentChar) {
 			continue;
 		}
 		if (!HeaderChecked_) {
 			HeaderChecked_ = true;
-			const TwoColumns columns = SplitTwoColumns(line);
+			const TwoColumns columns = SplitTwoColumns(stripped);
 			if (!columns.ok || !LooksLikeNumber(columns.first) || !LooksLikeNumber(columns.second)) {
 				continue;
 			}
 		}
-		ParseDataLine(line, out);
+		ParseDataLine(stripped, out);
 		return true;
 	}
 	return false;
+}
+
+bool CsvEdgeStream::NextLine(std::string_view* line) {
+	while (true) {
+		if (Cursor_ == BufferBytes_) {
+			if (FileExhausted()) {
+				return false;
+			}
+			Refill();
+			continue;
+		}
+		const uint64_t lineStart = BufferFileOffset_ + Cursor_;
+		if (lineStart >= EndBytes_) {
+			return false;
+		}
+		const void* found = std::memchr(Buffer_.data() + Cursor_, kNewline, BufferBytes_ - Cursor_);
+		if (found != nullptr) {
+			const size_t newlineIndex = static_cast<size_t>(static_cast<const char*>(found) - Buffer_.data());
+			*line = std::string_view(Buffer_.data() + Cursor_, newlineIndex - Cursor_);
+			LineStartOffset_ = lineStart;
+			Cursor_ = newlineIndex + 1;
+			++LineNo_;
+			return true;
+		}
+		if (FileExhausted()) {
+			*line = std::string_view(Buffer_.data() + Cursor_, BufferBytes_ - Cursor_);
+			LineStartOffset_ = lineStart;
+			Cursor_ = BufferBytes_;
+			++LineNo_;
+			return true;
+		}
+		if (Cursor_ == 0 && BufferBytes_ == Buffer_.size()) {
+			LineStartOffset_ = lineStart;
+			Fail(std::format("line is longer than {} bytes", Buffer_.size()));
+		}
+		Refill();
+	}
+}
+
+void CsvEdgeStream::Refill() {
+	const uint64_t consumedEnd = BufferFileOffset_ + Cursor_;
+	if (consumedEnd - AdvisedUntilBytes_ >= kParseAdviseBytes) {
+		File_.AdviseDontNeed(AdvisedUntilBytes_, consumedEnd - AdvisedUntilBytes_);
+		AdvisedUntilBytes_ = consumedEnd;
+	}
+	if (Cursor_ > 0) {
+		std::memmove(Buffer_.data(), Buffer_.data() + Cursor_, BufferBytes_ - Cursor_);
+		BufferFileOffset_ += Cursor_;
+		BufferBytes_ -= Cursor_;
+		Cursor_ = 0;
+	}
+	const uint64_t readFrom = BufferFileOffset_ + BufferBytes_;
+	const size_t portion = static_cast<size_t>(std::min<uint64_t>(Buffer_.size() - BufferBytes_, FileBytes_ - readFrom));
+	if (portion > 0) {
+		File_.ReadAt(readFrom, Buffer_.data() + BufferBytes_, portion);
+		BufferBytes_ += portion;
+	}
+}
+
+bool CsvEdgeStream::FileExhausted() const {
+	return BufferFileOffset_ + BufferBytes_ >= FileBytes_;
+}
+
+void CsvEdgeStream::AlignToOwnedLine() {
+	if (BeginBytes_ == 0 || BeginBytes_ >= FileBytes_) {
+		return;
+	}
+	BufferFileOffset_ = BeginBytes_ - 1;
+	Refill();
+	if (Buffer_[0] == kNewline) {
+		Cursor_ = 1;
+		return;
+	}
+	Cursor_ = 1;
+	while (true) {
+		const void* found = std::memchr(Buffer_.data() + Cursor_, kNewline, BufferBytes_ - Cursor_);
+		if (found != nullptr) {
+			Cursor_ = static_cast<size_t>(static_cast<const char*>(found) - Buffer_.data()) + 1;
+			return;
+		}
+		if (FileExhausted()) {
+			Cursor_ = BufferBytes_;
+			return;
+		}
+		Cursor_ = BufferBytes_;
+		Refill();
+	}
 }
 
 void CsvEdgeStream::ParseDataLine(std::string_view line, Edge* out) const {
@@ -115,13 +241,44 @@ uint32_t CsvEdgeStream::ParseId(std::string_view token) const {
 }
 
 void CsvEdgeStream::Fail(std::string_view reason) const {
+	if (ChunkMode_) {
+		throw CsvChunkError(LineStartOffset_, std::string(reason));
+	}
 	throw std::runtime_error(std::format("{}:{}: {}", Path_, LineNo_, reason));
 }
 
-EdgeScanner::EdgeScanner(const std::filesystem::path& path) : Path_(path) {}
+EdgeScanner::EdgeScanner(const std::filesystem::path& path, ThreadPool* pool)
+    : Path_(path), Pool_(pool) {}
 
 ScanResult EdgeScanner::Run() {
-	CsvEdgeStream stream(Path_, false);
+	const uint64_t fileBytes = InputFile(Path_).SizeBytes();
+	const uint32_t threads = Pool_ == nullptr ? 1 : Pool_->Threads();
+	if (threads == 1) {
+		return ScanChunk(0, fileBytes, true);
+	}
+	const uint64_t dataStart = CsvEdgeStream::DataStartBytes(Path_);
+	const uint64_t dataBytes = fileBytes - dataStart;
+	const uint64_t chunkCount = std::max<uint64_t>(threads, (dataBytes + kScanChunkBytes - 1) / kScanChunkBytes);
+	std::vector<ScanResult> partials(chunkCount, ScanResult{0, 0});
+	try {
+		Pool_->ParallelFor(chunkCount, [this, &partials, dataStart, dataBytes, chunkCount](uint32_t, uint64_t chunk) {
+			const uint64_t begin = dataStart + dataBytes * chunk / chunkCount;
+			const uint64_t end = dataStart + dataBytes * (chunk + 1) / chunkCount;
+			partials[chunk] = ScanChunk(begin, end, false);
+		});
+	} catch (const CsvChunkError& error) {
+		RethrowWithLineNumber(error);
+	}
+	ScanResult total{0, 0};
+	for (const ScanResult& part : partials) {
+		total.maxId = std::max(total.maxId, part.maxId);
+		total.edgesRaw += part.edgesRaw;
+	}
+	return total;
+}
+
+ScanResult EdgeScanner::ScanChunk(uint64_t beginBytes, uint64_t endBytes, bool firstChunk) const {
+	CsvEdgeStream stream(Path_, false, beginBytes, endBytes, firstChunk);
 	ScanResult result{0, 0};
 	Edge edge{};
 	while (stream.Next(&edge)) {
@@ -129,6 +286,20 @@ ScanResult EdgeScanner::Run() {
 		++result.edgesRaw;
 	}
 	return result;
+}
+
+void EdgeScanner::RethrowWithLineNumber(const CsvChunkError& error) const {
+	const InputFile file(Path_);
+	std::vector<char> buffer(kParseBufferBytes);
+	uint64_t newlines = 0;
+	uint64_t offset = 0;
+	while (offset < error.OffsetBytes()) {
+		const size_t portion = static_cast<size_t>(std::min<uint64_t>(buffer.size(), error.OffsetBytes() - offset));
+		file.ReadAt(offset, buffer.data(), portion);
+		newlines += static_cast<uint64_t>(std::count(buffer.begin(), buffer.begin() + static_cast<int64_t>(portion), '\n'));
+		offset += portion;
+	}
+	throw std::runtime_error(std::format("{}:{}: {}", Path_.string(), newlines + 1, error.Reason()));
 }
 
 } // namespace lr::common

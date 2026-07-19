@@ -24,6 +24,9 @@ int main(int argc, char** argv) {
 		opts.AddOption("--max-iters", "iteration cap (default: 500)")
 		    .Optional()
 		    .StoreResult(&config.maxIterations);
+		opts.AddOption("--threads", "worker thread count (default: threads_planned from meta)")
+		    .Optional()
+		    .StoreResult(&config.threads);
 		opts.Parse();
 
 		lr::rank::RankJob job(config, &std::cout);

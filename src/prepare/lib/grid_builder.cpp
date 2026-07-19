@@ -21,10 +21,33 @@ bool DstSrcLess(const common::Edge& left, const common::Edge& right) {
 	return left.src < right.src;
 }
 
+void MergeRuns(const std::vector<common::Edge>& source, std::vector<common::Edge>* target, uint64_t begin, uint64_t middle, uint64_t end) {
+	uint64_t left = begin;
+	uint64_t right = middle;
+	uint64_t out = begin;
+	while (left < middle && right < end) {
+		if (DstSrcLess(source[right], source[left])) {
+			(*target)[out++] = source[right++];
+		} else {
+			(*target)[out++] = source[left++];
+		}
+	}
+	while (left < middle) {
+		(*target)[out++] = source[left++];
+	}
+	while (right < end) {
+		(*target)[out++] = source[right++];
+	}
+}
+
+uint32_t AlignDownToBitmapByte(uint32_t vertex) {
+	return vertex & ~7u;
+}
+
 } // namespace
 
-EdgeScatterer::EdgeScatterer(const grid::PartitionScheme& scheme, const grid::WorkdirRoot& workdir, uint64_t arenaBytes)
-    : Scheme_(scheme), Workdir_(workdir) {
+EdgeScatterer::EdgeScatterer(const grid::PartitionScheme& scheme, const grid::WorkdirRoot& workdir, uint64_t arenaBytes, common::ThreadPool* pool)
+    : Scheme_(scheme), Workdir_(workdir), Pool_(pool), Mutexes_(scheme.BlockCount()) {
 	const uint64_t blocks = scheme.BlockCount();
 	const uint64_t bufferBytes = arenaBytes / blocks;
 	if (bufferBytes < common::kScatterMinBufferBytes) {
@@ -38,8 +61,37 @@ EdgeScatterer::EdgeScatterer(const grid::PartitionScheme& scheme, const grid::Wo
 	Counts_.assign(blocks, 0);
 }
 
-ScatterResult EdgeScatterer::Run(common::CsvEdgeStream* input) {
+ScatterResult EdgeScatterer::Run(const std::filesystem::path& edgesPath, bool transpose) {
 	std::filesystem::create_directories(Workdir_.TmpDir().Path());
+	ScatterResult result{0, 0};
+	if (Pool_->Threads() == 1) {
+		common::CsvEdgeStream stream(edgesPath, transpose);
+		result = ScatterStream(&stream);
+	} else {
+		const uint64_t fileBytes = common::InputFile(edgesPath).SizeBytes();
+		const uint64_t dataStart = common::CsvEdgeStream::DataStartBytes(edgesPath);
+		const uint64_t dataBytes = fileBytes - dataStart;
+		const uint64_t chunkCount = std::max<uint64_t>(Pool_->Threads(), (dataBytes + common::kScanChunkBytes - 1) / common::kScanChunkBytes);
+		std::vector<ScatterResult> partials(chunkCount, ScatterResult{0, 0});
+		Pool_->ParallelFor(chunkCount, [this, &partials, &edgesPath, transpose, dataStart, dataBytes, chunkCount](uint32_t, uint64_t chunk) {
+			const uint64_t begin = dataStart + dataBytes * chunk / chunkCount;
+			const uint64_t end = dataStart + dataBytes * (chunk + 1) / chunkCount;
+			common::CsvEdgeStream stream(edgesPath, transpose, begin, end, false);
+			partials[chunk] = ScatterStream(&stream);
+		});
+		for (const ScatterResult& part : partials) {
+			result.edgesWritten += part.edgesWritten;
+			result.droppedSelfLoops += part.droppedSelfLoops;
+		}
+	}
+	for (uint64_t block = 0; block < Counts_.size(); ++block) {
+		const std::lock_guard lock(Mutexes_[block]);
+		Flush(block);
+	}
+	return result;
+}
+
+ScatterResult EdgeScatterer::ScatterStream(common::CsvEdgeStream* input) {
 	ScatterResult result{0, 0};
 	common::Edge edge{};
 	while (input->Next(&edge)) {
@@ -47,39 +99,41 @@ ScatterResult EdgeScatterer::Run(common::CsvEdgeStream* input) {
 			++result.droppedSelfLoops;
 			continue;
 		}
-		const uint32_t block = Scheme_.IntervalOf(edge.src) * Scheme_.partitions + Scheme_.IntervalOf(edge.dst);
+		const uint64_t block = Scheme_.BlockPosition(Scheme_.IntervalOf(edge.src), Scheme_.IntervalOf(edge.dst));
+		const std::lock_guard lock(Mutexes_[block]);
 		Arena_[block * CapacityEdges_ + Counts_[block]] = edge;
 		if (++Counts_[block] == CapacityEdges_) {
 			Flush(block);
 		}
 		++result.edgesWritten;
 	}
-	for (uint32_t block = 0; block < Counts_.size(); ++block) {
-		Flush(block);
-	}
 	return result;
 }
 
-void EdgeScatterer::Flush(uint32_t block) {
+void EdgeScatterer::Flush(uint64_t block) {
 	if (Counts_[block] == 0) {
 		return;
 	}
-	const uint32_t srcInterval = block / Scheme_.partitions;
-	const uint32_t dstInterval = block % Scheme_.partitions;
+	const uint32_t srcInterval = static_cast<uint32_t>(block % Scheme_.partitions);
+	const uint32_t dstInterval = static_cast<uint32_t>(block / Scheme_.partitions);
 	const std::filesystem::path blockPath = Workdir_.TmpDir().Block(srcInterval, dstInterval);
 	common::AppendToFile(blockPath, Arena_.data() + block * CapacityEdges_, Counts_[block] * common::kEdgeBytes);
 	Counts_[block] = 0;
 }
 
-BlockAssembler::BlockAssembler(const grid::PartitionScheme& scheme, const grid::WorkdirRoot& workdir, uint64_t arenaBytes)
-    : Scheme_(scheme), Workdir_(workdir) {
+BlockAssembler::BlockAssembler(const grid::PartitionScheme& scheme, const grid::WorkdirRoot& workdir, uint64_t arenaBytes, common::ThreadPool* pool)
+    : Scheme_(scheme), Workdir_(workdir), Pool_(pool) {
 	const uint64_t inDegreeBytes = common::kDegreeBytesPerVertex * uint64_t{scheme.intervalSize};
 	if (arenaBytes <= inDegreeBytes) {
 		throw std::runtime_error("prepare budget is smaller than the in-degree accumulator: "
 		                         "increase --budget");
 	}
-	SortCapacityEdges_ = (arenaBytes - inDegreeBytes) / common::kEdgeBytes;
-	SortBuffer_.reserve(SortCapacityEdges_);
+	SortCapacityEdges_ = (arenaBytes - inDegreeBytes) / 2 / common::kEdgeBytes;
+	if (SortCapacityEdges_ == 0) {
+		throw std::runtime_error("prepare budget is smaller than the sort arena: increase --budget");
+	}
+	Arena_.reserve(SortCapacityEdges_);
+	Aux_.reserve(SortCapacityEdges_);
 	InDegrees_.assign(scheme.intervalSize, 0);
 }
 
@@ -116,20 +170,16 @@ AssembleResult BlockAssembler::Run() {
 				                "increase --budget",
 				                srcInterval, dstInterval, rawCount));
 			}
-			SortBuffer_.resize(rawCount);
-			tmpFile.ReadAt(0, SortBuffer_.data(), tmpFile.SizeBytes());
+			Arena_.resize(rawCount);
+			tmpFile.ReadAt(0, Arena_.data(), tmpFile.SizeBytes());
 			tmpFile.AdviseDontNeed(0, tmpFile.SizeBytes());
-			std::sort(SortBuffer_.begin(), SortBuffer_.end(), DstSrcLess);
-			const auto uniqueEnd = std::unique(SortBuffer_.begin(), SortBuffer_.end());
-			const uint64_t uniqueCount = static_cast<uint64_t>(uniqueEnd - SortBuffer_.begin());
+			SortBlock(rawCount);
+			const auto uniqueEnd = std::unique(Arena_.begin(), Arena_.begin() + static_cast<int64_t>(rawCount));
+			const uint64_t uniqueCount = static_cast<uint64_t>(uniqueEnd - Arena_.begin());
 			result.droppedDuplicates += rawCount - uniqueCount;
 
-			for (uint64_t i = 0; i < uniqueCount; ++i) {
-				const uint32_t local = SortBuffer_[i].dst - columnBase;
-				++InDegrees_[local];
-				dstPresent.Set(local);
-			}
-			blocksBin.Append(SortBuffer_.data(), uniqueCount * common::kEdgeBytes);
+			CountColumnEdges(uniqueCount, columnBase, columnLength, &dstPresent);
+			blocksBin.Append(Arena_.data(), uniqueCount * common::kEdgeBytes);
 			ref->edgeCount = uniqueCount;
 			std::filesystem::remove(tmpPath);
 		}
@@ -145,8 +195,71 @@ AssembleResult BlockAssembler::Run() {
 	return result;
 }
 
-DegreeBuilder::DegreeBuilder(const grid::PartitionScheme& scheme, const grid::WorkdirRoot& workdir, uint64_t chunkBytes)
-    : Scheme_(scheme), Workdir_(workdir), ChunkBytes_(chunkBytes) {
+void BlockAssembler::SortBlock(uint64_t edgeCount) {
+	const uint32_t threads = Pool_->Threads();
+	if (edgeCount < common::kParallelSortMinEdges || threads == 1) {
+		std::sort(Arena_.begin(), Arena_.begin() + static_cast<int64_t>(edgeCount), DstSrcLess);
+		return;
+	}
+	Runs_.clear();
+	for (uint32_t run = 0; run <= threads; ++run) {
+		Runs_.push_back(edgeCount * run / threads);
+	}
+	Pool_->ParallelFor(threads, [this](uint32_t, uint64_t run) {
+		std::sort(Arena_.begin() + static_cast<int64_t>(Runs_[run]), Arena_.begin() + static_cast<int64_t>(Runs_[run + 1]), DstSrcLess);
+	});
+
+	Aux_.resize(edgeCount);
+	std::vector<common::Edge>* source = &Arena_;
+	std::vector<common::Edge>* target = &Aux_;
+	while (Runs_.size() > 2) {
+		const uint64_t pairCount = (Runs_.size() - 1) / 2;
+		Pool_->ParallelFor(pairCount, [this, source, target](uint32_t, uint64_t pair) {
+			MergeRuns(*source, target, Runs_[2 * pair], Runs_[2 * pair + 1], Runs_[2 * pair + 2]);
+		});
+		std::vector<uint64_t> mergedRuns;
+		for (uint64_t boundary = 0; boundary < Runs_.size(); boundary += 2) {
+			mergedRuns.push_back(Runs_[boundary]);
+		}
+		if ((Runs_.size() - 1) % 2 == 1) {
+			std::copy(source->begin() + static_cast<int64_t>(Runs_[Runs_.size() - 2]),
+			          source->begin() + static_cast<int64_t>(Runs_.back()),
+			          target->begin() + static_cast<int64_t>(Runs_[Runs_.size() - 2]));
+			if (mergedRuns.back() != Runs_.back()) {
+				mergedRuns.push_back(Runs_.back());
+			}
+		}
+		Runs_ = std::move(mergedRuns);
+		std::swap(source, target);
+	}
+	if (source != &Arena_) {
+		std::copy(source->begin(), source->begin() + static_cast<int64_t>(edgeCount), Arena_.begin());
+	}
+}
+
+void BlockAssembler::CountColumnEdges(uint64_t uniqueCount, uint32_t columnBase, uint32_t columnLength, common::Bitmap* dstPresent) {
+	const uint32_t threads = Pool_->Threads();
+	Pool_->ParallelFor(threads, [this, uniqueCount, columnBase, columnLength, dstPresent, threads](uint32_t, uint64_t part) {
+		const uint32_t lowLocal = AlignDownToBitmapByte(static_cast<uint32_t>(uint64_t{columnLength} * part / threads));
+		const uint32_t highLocal = part + 1 == threads ? columnLength : AlignDownToBitmapByte(static_cast<uint32_t>(uint64_t{columnLength} * (part + 1) / threads));
+		if (lowLocal >= highLocal) {
+			return;
+		}
+		const auto lessByDst = [](const common::Edge& edge, uint32_t dst) {
+			return edge.dst < dst;
+		};
+		const auto begin = std::lower_bound(Arena_.begin(), Arena_.begin() + static_cast<int64_t>(uniqueCount), columnBase + lowLocal, lessByDst);
+		const auto end = std::lower_bound(begin, Arena_.begin() + static_cast<int64_t>(uniqueCount), columnBase + highLocal, lessByDst);
+		for (auto it = begin; it != end; ++it) {
+			const uint32_t local = it->dst - columnBase;
+			++InDegrees_[local];
+			dstPresent->Set(local);
+		}
+	});
+}
+
+DegreeBuilder::DegreeBuilder(const grid::PartitionScheme& scheme, const grid::WorkdirRoot& workdir, uint64_t chunkBytes, common::ThreadPool* pool)
+    : Scheme_(scheme), Workdir_(workdir), ChunkBytes_(chunkBytes), Pool_(pool) {
 	OutDegrees_.assign(scheme.intervalSize, 0);
 }
 
@@ -154,6 +267,7 @@ DegreesResult DegreeBuilder::Run() {
 	const common::InputFile blocksBin(Workdir_.BlocksBin());
 	const grid::BlockIndex index = grid::BlockIndex::Load(Scheme_, Workdir_);
 	grid::BlockReader reader(&blocksBin, ChunkBytes_);
+	const uint32_t threads = Pool_->Threads();
 
 	DegreesResult result{0, 0};
 	for (uint32_t srcInterval = 0; srcInterval < Scheme_.partitions; ++srcInterval) {
@@ -166,11 +280,20 @@ DegreesResult DegreeBuilder::Run() {
 			reader.Open(index.At(srcInterval, dstInterval));
 			std::span<const common::Edge> chunk;
 			while (reader.Next(&chunk)) {
-				for (const common::Edge& edge : chunk) {
-					const uint32_t local = edge.src - rowBase;
-					++OutDegrees_[local];
-					srcPresent.Set(local);
-				}
+				Pool_->ParallelFor(threads, [this, chunk, rowBase, rowLength, threads, &srcPresent](uint32_t, uint64_t part) {
+					const uint32_t lowLocal = AlignDownToBitmapByte(static_cast<uint32_t>(uint64_t{rowLength} * part / threads));
+					const uint32_t highLocal = part + 1 == threads ? rowLength : AlignDownToBitmapByte(static_cast<uint32_t>(uint64_t{rowLength} * (part + 1) / threads));
+					if (lowLocal >= highLocal) {
+						return;
+					}
+					for (const common::Edge& edge : chunk) {
+						const uint32_t local = edge.src - rowBase;
+						if (local >= lowLocal && local < highLocal) {
+							++OutDegrees_[local];
+							srcPresent.Set(local);
+						}
+					}
+				});
 			}
 		}
 
