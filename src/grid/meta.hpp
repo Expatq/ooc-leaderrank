@@ -12,13 +12,9 @@ public:
 	static Meta Load(const WorkdirRoot& workdir);
 	void Save(const WorkdirRoot& workdir) const;
 
-	PartitionScheme Scheme() const;
-
+	PartitionScheme scheme{};
 	uint32_t transpose = 0;
 	uint32_t threadsPlanned = 1;
-	uint32_t maxId = 0;
-	uint32_t intervalSize = 0;
-	uint32_t partitions = 0;
 	uint64_t vertices = 0;
 	uint64_t edgesRaw = 0;
 	uint64_t edges = 0;

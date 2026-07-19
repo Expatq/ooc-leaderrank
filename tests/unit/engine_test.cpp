@@ -21,9 +21,9 @@ namespace {
 
 using lr::grid::Meta;
 using lr::grid::PartitionScheme;
-using lr::grid::WorkdirLayout;
 using lr::grid::WorkdirRoot;
 using lr::rank::Engine;
+using lr::rank::RankConfig;
 using lr::rank::RankResult;
 
 constexpr uint64_t kTestArenaBytes = 1_MiB;
@@ -31,9 +31,17 @@ constexpr uint64_t kTestBudgetBytes = 64_MiB;
 constexpr double kTestEps = 1e-13;
 constexpr double kValueTolerance = 1e-9;
 
+RankConfig TestConfig() {
+	RankConfig config;
+	config.budgetBytes = kTestBudgetBytes;
+	config.eps = kTestEps;
+	config.maxIterations = lr::common::kDefaultMaxIterations;
+	return config;
+}
+
 WorkdirRoot BuildWorkdir(const std::string& name, const PartitionScheme& scheme,
                          const std::string& csvContent) {
-	const WorkdirRoot workdir = WorkdirLayout(testing::TempDir() + name).Root();
+	const WorkdirRoot workdir(testing::TempDir() + name);
 	std::filesystem::remove_all(workdir.Path());
 	std::filesystem::create_directories(workdir.DegreesDir().Path());
 	std::filesystem::create_directories(workdir.PresentDir().Path());
@@ -45,12 +53,11 @@ WorkdirRoot BuildWorkdir(const std::string& name, const PartitionScheme& scheme,
 	lr::common::CsvEdgeStream stream(csvPath, false);
 	const auto scatter = lr::prepare::EdgeScatterer(scheme, workdir, kTestArenaBytes).Run(&stream);
 	const auto assembly = lr::prepare::BlockAssembler(scheme, workdir, kTestArenaBytes).Run();
-	const auto degrees = lr::prepare::DegreeBuilder(scheme, workdir).Run();
+	const auto degrees =
+	    lr::prepare::DegreeBuilder(scheme, workdir, lr::common::kMinIoChunkBytes).Run();
 
 	Meta meta;
-	meta.maxId = scheme.maxId;
-	meta.intervalSize = scheme.intervalSize;
-	meta.partitions = scheme.partitions;
+	meta.scheme = scheme;
 	meta.vertices = degrees.vertices;
 	meta.edgesRaw = scatter.edgesWritten + scatter.droppedSelfLoops;
 	meta.edges = scatter.edgesWritten - assembly.droppedDuplicates;
@@ -77,7 +84,7 @@ TEST(Engine, TaskExampleConvergesToStationaryPoint) {
 	const WorkdirRoot workdir =
 	    BuildWorkdir("engine_task", scheme, "from,to\n1,2\n2,3\n3,1\n4,1\n");
 
-	Engine engine(workdir, kTestBudgetBytes, kTestEps, lr::common::kDefaultMaxIterations);
+	Engine engine(workdir, TestConfig(), nullptr);
 	const RankResult result = engine.Run();
 
 	EXPECT_TRUE(result.converged);
@@ -95,7 +102,7 @@ TEST(Engine, CycleGivesEqualScores) {
 	const PartitionScheme scheme{3, 2, 2};
 	const WorkdirRoot workdir = BuildWorkdir("engine_cycle", scheme, "from,to\n1,2\n2,3\n3,1\n");
 
-	Engine engine(workdir, kTestBudgetBytes, kTestEps, lr::common::kDefaultMaxIterations);
+	Engine engine(workdir, TestConfig(), nullptr);
 	const RankResult result = engine.Run();
 
 	EXPECT_TRUE(result.converged);
@@ -106,18 +113,31 @@ TEST(Engine, CycleGivesEqualScores) {
 }
 
 TEST(Engine, EmptyGraphMetaFails) {
-	const WorkdirRoot workdir = WorkdirLayout(testing::TempDir() + "engine_empty").Root();
+	const WorkdirRoot workdir(testing::TempDir() + "engine_empty");
 	std::filesystem::remove_all(workdir.Path());
 	std::filesystem::create_directories(workdir.Path());
 	Meta meta;
-	meta.maxId = 4;
-	meta.intervalSize = 5;
-	meta.partitions = 1;
+	meta.scheme = PartitionScheme{4, 1, 5};
 	meta.vertices = 0;
 	meta.edges = 0;
 	meta.Save(workdir);
-	EXPECT_THROW(Engine(workdir, kTestBudgetBytes, kTestEps, lr::common::kDefaultMaxIterations),
-	             std::runtime_error);
+	EXPECT_THROW(Engine(workdir, TestConfig(), nullptr), std::runtime_error);
+}
+
+TEST(Engine, TruncatedBlocksBinFails) {
+	const PartitionScheme scheme{4, 2, 3};
+	const WorkdirRoot workdir =
+	    BuildWorkdir("engine_truncated", scheme, "from,to\n1,2\n2,3\n3,1\n4,1\n");
+	std::filesystem::resize_file(workdir.BlocksBin(), 100);
+	EXPECT_THROW(Engine(workdir, TestConfig(), nullptr), std::runtime_error);
+}
+
+TEST(Engine, WrongDegreesFileSizeFails) {
+	const PartitionScheme scheme{4, 2, 3};
+	const WorkdirRoot workdir =
+	    BuildWorkdir("engine_bad_deg", scheme, "from,to\n1,2\n2,3\n3,1\n4,1\n");
+	std::filesystem::resize_file(workdir.DegreesDir().Degrees(0), 16);
+	EXPECT_THROW(Engine(workdir, TestConfig(), nullptr), std::runtime_error);
 }
 
 } // namespace

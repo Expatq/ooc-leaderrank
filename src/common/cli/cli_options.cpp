@@ -128,12 +128,7 @@ CliOptions& CliOptions::AddSpec(Kind kind, std::string name, std::string help) {
 	if (name == kHelpFlag) {
 		throw std::logic_error("--help is reserved");
 	}
-	Specs_.push_back({kind,
-	                  std::move(name),
-	                  std::move(help),
-	                  kind != Kind::Flag,
-	                  {},
-	                  nullptr});
+	Specs_.push_back({kind, std::move(name), std::move(help), kind != Kind::Flag, {}, nullptr});
 	return *this;
 }
 
@@ -209,8 +204,7 @@ std::string CliOptions::Help() const {
 		if (spec.kind == Kind::Option && spec.required) {
 			help += help.empty() ? "(required)" : " (required)";
 		}
-		rows.emplace_back(SpecLabel(spec.kind == Kind::Positional, spec.kind == Kind::Option, spec.name),
-		                  std::move(help));
+		rows.emplace_back(SpecLabel(spec.kind == Kind::Positional, spec.kind == Kind::Option, spec.name), std::move(help));
 	}
 	rows.emplace_back(std::string(kHelpFlag), "show this help and exit");
 

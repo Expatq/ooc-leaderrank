@@ -12,19 +12,22 @@ namespace lr::grid {
 
 namespace {
 
-using Uint128 = unsigned __int128;
-
 uint64_t CeilDiv(uint64_t dividend, uint64_t divisor) {
 	return (dividend + divisor - 1) / divisor;
 }
 
 bool SortArenaFits(uint64_t vertexCount, uint64_t edgesRaw, uint64_t usableBytes, uint64_t partitions) {
-	const Uint128 arena = Uint128(common::kEdgeBytes) * edgesRaw +
-	                      Uint128(common::kDegreeBytesPerVertex) * vertexCount * partitions;
+	using Uint128 = unsigned __int128;
+	const Uint128 arena = Uint128(common::kEdgeBytes) * edgesRaw + Uint128(common::kDegreeBytesPerVertex) * vertexCount * partitions;
 	return arena <= Uint128(usableBytes) * partitions * partitions;
 }
 
 } // namespace
+
+PartitionScheme PartitionScheme::Create(uint32_t maxId, uint32_t partitions) {
+	const uint64_t intervalSize = CeilDiv(uint64_t{maxId} + 1, partitions);
+	return PartitionScheme{maxId, partitions, static_cast<uint32_t>(intervalSize)};
+}
 
 uint64_t PartitionScheme::VertexCount() const {
 	return uint64_t{maxId} + 1;
@@ -51,6 +54,11 @@ uint64_t PartitionScheme::BlockPosition(uint32_t srcInterval, uint32_t dstInterv
 	return uint64_t{dstInterval} * partitions + srcInterval;
 }
 
+ByteRange PartitionScheme::RankByteRange(uint32_t interval) const {
+	const uint64_t offsetBytes = uint64_t{IntervalBase(interval)} * common::kRankBytesPerVertex;
+	return ByteRange{offsetBytes, uint64_t{IntervalLength(interval)} * common::kRankBytesPerVertex};
+}
+
 PartitionPlanner::PartitionPlanner(uint64_t budgetBytes, uint32_t threads)
     : BudgetBytes_(budgetBytes), Threads_(threads) {
 	if (threads == 0) {
@@ -67,9 +75,7 @@ PartitionScheme PartitionPlanner::Plan(uint32_t maxId, uint64_t edgesRaw) const 
 	}
 	const uint64_t vertexCount = uint64_t{maxId} + 1;
 	const uint64_t partitions = ChoosePartitions(vertexCount, edgesRaw);
-	const uint64_t intervalSize = CeilDiv(vertexCount, partitions);
-	return PartitionScheme{maxId, static_cast<uint32_t>(partitions),
-	                       static_cast<uint32_t>(intervalSize)};
+	return PartitionScheme::Create(maxId, static_cast<uint32_t>(partitions));
 }
 
 uint64_t PartitionPlanner::MinBudgetBytes(uint32_t maxId, uint64_t edgesRaw) const {
@@ -87,8 +93,7 @@ uint64_t PartitionPlanner::MinBudgetBytes(uint32_t maxId, uint64_t edgesRaw) con
 }
 
 uint64_t PartitionPlanner::IoChunkBytes() const {
-	const uint64_t raw = common::kIoChunkNumerator * BudgetBytes_ /
-	                     (common::kIoChunkDenominatorPerThread * Threads_);
+	const uint64_t raw = common::kIoChunkNumerator * BudgetBytes_ / (common::kIoChunkDenominatorPerThread * Threads_);
 	return std::clamp(raw, common::kMinIoChunkBytes, common::kMaxIoChunkBytes);
 }
 
@@ -106,8 +111,7 @@ uint64_t PartitionPlanner::ChoosePartitions(uint64_t vertexCount, uint64_t edges
 	const uint64_t windowBound = CeilDiv(common::kColumnBytesPerVertex * vertexCount, usable);
 
 	const double v = static_cast<double>(vertexCount);
-	const double discriminant =
-	    4.0 * v * v + 8.0 * static_cast<double>(usable) * static_cast<double>(edgesRaw);
+	const double discriminant = 4.0 * v * v + 8.0 * static_cast<double>(usable) * static_cast<double>(edgesRaw);
 	const double estimate = (2.0 * v + std::sqrt(discriminant)) / static_cast<double>(usable);
 	uint64_t sortBound = std::max<uint64_t>(1, static_cast<uint64_t>(estimate));
 	while (sortBound > 1 && SortArenaFits(vertexCount, edgesRaw, usable, sortBound - 1)) {

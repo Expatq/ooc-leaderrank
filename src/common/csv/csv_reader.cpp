@@ -11,11 +11,11 @@ namespace lr::common {
 
 namespace {
 
-constexpr char kComma = ',';
-constexpr char kTab = '\t';
-constexpr char kCommentChar = '#';
-constexpr char kMinusChar = '-';
-constexpr std::string_view kStripChars = " \r";
+constexpr static char kComma = ',';
+constexpr static char kTab = '\t';
+constexpr static char kCommentChar = '#';
+constexpr static char kMinusChar = '-';
+constexpr static std::string_view kStripChars = " \r";
 
 std::string_view Strip(std::string_view text) {
 	const size_t begin = text.find_first_not_of(kStripChars);
@@ -59,10 +59,10 @@ TwoColumns SplitTwoColumns(std::string_view line) {
 
 } // namespace
 
-CsvEdgeStream::CsvEdgeStream(const std::string& path, bool transpose)
-    : Input_(path), Path_(path), LineNo_(0), HeaderChecked_(false), Transpose_(transpose) {
+CsvEdgeStream::CsvEdgeStream(const std::filesystem::path& path, bool transpose)
+    : Input_(path), Path_(path.string()), LineNo_(0), HeaderChecked_(false), Transpose_(transpose) {
 	if (!Input_) {
-		throw std::runtime_error(std::format("cannot open {}", path));
+		throw std::runtime_error(std::format("cannot open {}", Path_));
 	}
 }
 
@@ -76,8 +76,7 @@ bool CsvEdgeStream::Next(Edge* out) {
 		if (!HeaderChecked_) {
 			HeaderChecked_ = true;
 			const TwoColumns columns = SplitTwoColumns(line);
-			if (!columns.ok || !LooksLikeNumber(columns.first) ||
-			    !LooksLikeNumber(columns.second)) {
+			if (!columns.ok || !LooksLikeNumber(columns.first) || !LooksLikeNumber(columns.second)) {
 				continue;
 			}
 		}
@@ -102,8 +101,7 @@ uint32_t CsvEdgeStream::ParseId(std::string_view token) const {
 		Fail(std::format("negative id: {}", token));
 	}
 	uint64_t value = 0;
-	const auto [parsedEnd, errorCode] =
-	    std::from_chars(token.data(), token.data() + token.size(), value);
+	const auto [parsedEnd, errorCode] = std::from_chars(token.data(), token.data() + token.size(), value);
 	if (errorCode == std::errc::result_out_of_range) {
 		Fail(std::format("id exceeds int32: {}", token));
 	}
@@ -120,7 +118,7 @@ void CsvEdgeStream::Fail(std::string_view reason) const {
 	throw std::runtime_error(std::format("{}:{}: {}", Path_, LineNo_, reason));
 }
 
-EdgeScanner::EdgeScanner(const std::string& path) : Path_(path) {}
+EdgeScanner::EdgeScanner(const std::filesystem::path& path) : Path_(path) {}
 
 ScanResult EdgeScanner::Run() {
 	CsvEdgeStream stream(Path_, false);

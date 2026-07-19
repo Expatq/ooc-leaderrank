@@ -10,7 +10,7 @@ namespace lr::common {
 
 namespace {
 
-constexpr uint32_t kBitsPerByte = 8;
+constexpr static uint32_t kBitsPerByte = 8;
 
 } // namespace
 
@@ -35,26 +35,24 @@ uint64_t Bitmap::PopCount() const {
 
 void Bitmap::OrWith(const Bitmap& other) {
 	if (other.BitCount_ != BitCount_) {
-		throw std::runtime_error(std::format("OR of bitmaps with different lengths: {} and {}",
-		                                     BitCount_, other.BitCount_));
+		throw std::runtime_error(std::format("OR of bitmaps with different lengths: {} and {}", BitCount_, other.BitCount_));
 	}
 	for (size_t i = 0; i < Bytes_.size(); ++i) {
 		Bytes_[i] |= other.Bytes_[i];
 	}
 }
 
-Bitmap Bitmap::Load(const std::string& path, uint32_t bitCount) {
+Bitmap Bitmap::Load(const std::filesystem::path& path, uint32_t bitCount) {
 	Bitmap bitmap(bitCount);
 	const InputFile file(path);
 	if (file.SizeBytes() != bitmap.Bytes_.size()) {
-		throw std::runtime_error(std::format("{}: size is {} bytes, expected {}", path,
-		                                     file.SizeBytes(), bitmap.Bytes_.size()));
+		throw std::runtime_error(std::format("{}: size is {} bytes, expected {}", path.string(), file.SizeBytes(), bitmap.Bytes_.size()));
 	}
 	file.ReadAt(0, bitmap.Bytes_.data(), bitmap.Bytes_.size());
 	return bitmap;
 }
 
-void Bitmap::Save(const std::string& path) const {
+void Bitmap::Save(const std::filesystem::path& path) const {
 	OutputFile file(path);
 	file.Append(Bytes_.data(), Bytes_.size());
 }

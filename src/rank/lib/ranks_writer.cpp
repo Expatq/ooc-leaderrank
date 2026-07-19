@@ -15,7 +15,7 @@ namespace lr::rank {
 
 namespace {
 
-constexpr uint64_t kFlushThresholdBytes = 1_MiB;
+constexpr static uint64_t kFlushThresholdBytes = 1_MiB;
 
 } // namespace
 
@@ -23,9 +23,8 @@ RanksCsvWriter::RanksCsvWriter(const grid::WorkdirRoot& workdir, const grid::Met
     : Workdir_(workdir), Meta_(meta) {}
 
 void RanksCsvWriter::Write(const RankResult& result, const std::filesystem::path& outPath) const {
-	const grid::PartitionScheme scheme = Meta_.Scheme();
-	const common::RandomAccessFile rankFile(Workdir_.RankFile(result.rankFileSide).string(),
-	                                        scheme.VertexCount() * common::kRankBytesPerVertex);
+	const grid::PartitionScheme scheme = Meta_.scheme;
+	const common::RandomAccessFile rankFile(Workdir_.RankFile(result.rankFileSide), scheme.VertexCount() * common::kRankBytesPerVertex);
 
 	std::ofstream output(outPath, std::ios::trunc);
 	if (!output) {
@@ -41,12 +40,10 @@ void RanksCsvWriter::Write(const RankResult& result, const std::filesystem::path
 	for (uint32_t interval = 0; interval < scheme.partitions; ++interval) {
 		const uint32_t length = scheme.IntervalLength(interval);
 		const uint32_t base = scheme.IntervalBase(interval);
-		rankFile.ReadAt(uint64_t{base} * common::kRankBytesPerVertex, window.data(),
-		                uint64_t{length} * common::kRankBytesPerVertex);
-		rankFile.AdviseDontNeed(uint64_t{base} * common::kRankBytesPerVertex,
-		                        uint64_t{length} * common::kRankBytesPerVertex);
-		const common::Bitmap present =
-		    common::Bitmap::Load(Workdir_.PresentDir().Present(interval).string(), length);
+		const grid::ByteRange range = scheme.RankByteRange(interval);
+		rankFile.ReadAt(range.offsetBytes, window.data(), range.bytes);
+		rankFile.AdviseDontNeed(range.offsetBytes, range.bytes);
+		const common::Bitmap present = common::Bitmap::Load(Workdir_.PresentDir().Present(interval), length);
 		for (uint32_t i = 0; i < length; ++i) {
 			if (present.Test(i)) {
 				const double rank = (window[i] + groundShare) / vertexCount;

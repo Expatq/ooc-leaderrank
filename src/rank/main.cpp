@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
 		    .StoreResult(&config.maxIterations);
 		opts.Parse();
 
-		lr::rank::RankJob job(config);
+		lr::rank::RankJob job(config, &std::cout);
 		const lr::rank::RankResult result = job.Run();
 		if (!result.converged) {
 			std::cerr << std::format(

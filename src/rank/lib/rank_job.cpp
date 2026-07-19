@@ -1,5 +1,6 @@
 #include "rank_job.hpp"
 
+#include "engine.hpp"
 #include "ranks_writer.hpp"
 
 #include <grid/layout.hpp>
@@ -9,14 +10,15 @@
 
 namespace lr::rank {
 
-RankJob::RankJob(RankConfig config) : Config_(std::move(config)) {}
+RankJob::RankJob(RankConfig config, std::ostream* progress)
+    : Config_(std::move(config)), Progress_(progress) {}
 
 RankResult RankJob::Run() {
-	const grid::WorkdirRoot workdir = grid::WorkdirLayout(Config_.workdir).Root();
+	const grid::WorkdirRoot workdir(Config_.workdir);
 	grid::Meta meta;
 	RankResult result{};
 	{
-		Engine engine(workdir, Config_.budgetBytes, Config_.eps, Config_.maxIterations);
+		Engine engine(workdir, Config_, Progress_);
 		result = engine.Run();
 		meta = engine.GetMeta();
 	}

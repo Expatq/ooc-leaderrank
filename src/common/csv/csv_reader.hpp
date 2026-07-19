@@ -3,6 +3,7 @@
 #include <common/core/edge.hpp>
 
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <string_view>
@@ -11,7 +12,7 @@ namespace lr::common {
 
 class CsvEdgeStream {
 public:
-	CsvEdgeStream(const std::string& path, bool transpose);
+	CsvEdgeStream(const std::filesystem::path& path, bool transpose);
 
 	bool Next(Edge* out);
 
@@ -35,12 +36,12 @@ struct ScanResult {
 
 class EdgeScanner {
 public:
-	explicit EdgeScanner(const std::string& path);
+	explicit EdgeScanner(const std::filesystem::path& path);
 
 	ScanResult Run();
 
 private:
-	std::string Path_;
+	std::filesystem::path Path_;
 };
 
 } // namespace lr::common

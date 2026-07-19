@@ -23,9 +23,8 @@ bool DstSrcLess(const common::Edge& left, const common::Edge& right) {
 
 } // namespace
 
-EdgeScatterer::EdgeScatterer(const grid::PartitionScheme& scheme, const grid::WorkdirRoot& workdir,
-                             uint64_t arenaBytes)
-    : Scheme_(scheme), Tmp_(workdir.TmpDir()) {
+EdgeScatterer::EdgeScatterer(const grid::PartitionScheme& scheme, const grid::WorkdirRoot& workdir, uint64_t arenaBytes)
+    : Scheme_(scheme), Workdir_(workdir) {
 	const uint64_t blocks = scheme.BlockCount();
 	const uint64_t bufferBytes = arenaBytes / blocks;
 	if (bufferBytes < common::kScatterMinBufferBytes) {
@@ -40,7 +39,7 @@ EdgeScatterer::EdgeScatterer(const grid::PartitionScheme& scheme, const grid::Wo
 }
 
 ScatterResult EdgeScatterer::Run(common::CsvEdgeStream* input) {
-	std::filesystem::create_directories(Tmp_.Path());
+	std::filesystem::create_directories(Workdir_.TmpDir().Path());
 	ScatterResult result{0, 0};
 	common::Edge edge{};
 	while (input->Next(&edge)) {
@@ -48,8 +47,7 @@ ScatterResult EdgeScatterer::Run(common::CsvEdgeStream* input) {
 			++result.droppedSelfLoops;
 			continue;
 		}
-		const uint32_t block =
-		    Scheme_.IntervalOf(edge.src) * Scheme_.partitions + Scheme_.IntervalOf(edge.dst);
+		const uint32_t block = Scheme_.IntervalOf(edge.src) * Scheme_.partitions + Scheme_.IntervalOf(edge.dst);
 		Arena_[block * CapacityEdges_ + Counts_[block]] = edge;
 		if (++Counts_[block] == CapacityEdges_) {
 			Flush(block);
@@ -68,14 +66,12 @@ void EdgeScatterer::Flush(uint32_t block) {
 	}
 	const uint32_t srcInterval = block / Scheme_.partitions;
 	const uint32_t dstInterval = block % Scheme_.partitions;
-	common::AppendToFile(Tmp_.Block(srcInterval, dstInterval).string(),
-	                     Arena_.data() + block * CapacityEdges_,
-	                     Counts_[block] * common::kEdgeBytes);
+	const std::filesystem::path blockPath = Workdir_.TmpDir().Block(srcInterval, dstInterval);
+	common::AppendToFile(blockPath, Arena_.data() + block * CapacityEdges_, Counts_[block] * common::kEdgeBytes);
 	Counts_[block] = 0;
 }
 
-BlockAssembler::BlockAssembler(const grid::PartitionScheme& scheme,
-                               const grid::WorkdirRoot& workdir, uint64_t arenaBytes)
+BlockAssembler::BlockAssembler(const grid::PartitionScheme& scheme, const grid::WorkdirRoot& workdir, uint64_t arenaBytes)
     : Scheme_(scheme), Workdir_(workdir) {
 	const uint64_t inDegreeBytes = common::kDegreeBytesPerVertex * uint64_t{scheme.intervalSize};
 	if (arenaBytes <= inDegreeBytes) {
@@ -88,7 +84,7 @@ BlockAssembler::BlockAssembler(const grid::PartitionScheme& scheme,
 }
 
 AssembleResult BlockAssembler::Run() {
-	common::OutputFile blocksBin(Workdir_.BlocksBin().string());
+	common::OutputFile blocksBin(Workdir_.BlocksBin());
 	grid::BlockIndex index(Scheme_);
 	const grid::TmpDir tmp = Workdir_.TmpDir();
 	AssembleResult result{0, 0};
@@ -109,11 +105,10 @@ AssembleResult BlockAssembler::Run() {
 			if (!std::filesystem::exists(tmpPath)) {
 				continue;
 			}
-			const common::InputFile tmpFile(tmpPath.string());
+			const common::InputFile tmpFile(tmpPath);
 			const uint64_t rawCount = tmpFile.SizeBytes() / common::kEdgeBytes;
 			if (rawCount * common::kEdgeBytes != tmpFile.SizeBytes()) {
-				throw std::runtime_error(
-				    std::format("{}: size is not a multiple of the edge size", tmpPath.string()));
+				throw std::runtime_error(std::format("{}: size is not a multiple of the edge size", tmpPath.string()));
 			}
 			if (rawCount > SortCapacityEdges_) {
 				throw std::runtime_error(
@@ -142,23 +137,23 @@ AssembleResult BlockAssembler::Run() {
 		for (uint32_t local = 0; local < columnLength; ++local) {
 			result.maxInDegree = std::max(result.maxInDegree, InDegrees_[local]);
 		}
-		dstPresent.Save(Workdir_.PresentDir().Present(dstInterval).string());
+		dstPresent.Save(Workdir_.PresentDir().Present(dstInterval));
 	}
 
-	index.Save(Workdir_.BlocksIdx());
+	index.Save(Workdir_);
 	std::filesystem::remove_all(tmp.Path());
 	return result;
 }
 
-DegreeBuilder::DegreeBuilder(const grid::PartitionScheme& scheme, const grid::WorkdirRoot& workdir)
-    : Scheme_(scheme), Workdir_(workdir) {
+DegreeBuilder::DegreeBuilder(const grid::PartitionScheme& scheme, const grid::WorkdirRoot& workdir, uint64_t chunkBytes)
+    : Scheme_(scheme), Workdir_(workdir), ChunkBytes_(chunkBytes) {
 	OutDegrees_.assign(scheme.intervalSize, 0);
 }
 
 DegreesResult DegreeBuilder::Run() {
-	const common::InputFile blocksBin(Workdir_.BlocksBin().string());
-	const grid::BlockIndex index = grid::BlockIndex::Load(Workdir_.BlocksIdx(), Scheme_);
-	grid::BlockReader reader(&blocksBin, common::kMinIoChunkBytes);
+	const common::InputFile blocksBin(Workdir_.BlocksBin());
+	const grid::BlockIndex index = grid::BlockIndex::Load(Scheme_, Workdir_);
+	grid::BlockReader reader(&blocksBin, ChunkBytes_);
 
 	DegreesResult result{0, 0};
 	for (uint32_t srcInterval = 0; srcInterval < Scheme_.partitions; ++srcInterval) {
@@ -179,7 +174,7 @@ DegreesResult DegreeBuilder::Run() {
 			}
 		}
 
-		const std::string presentPath = Workdir_.PresentDir().Present(srcInterval).string();
+		const std::filesystem::path presentPath = Workdir_.PresentDir().Present(srcInterval);
 		common::Bitmap present = common::Bitmap::Load(presentPath, rowLength);
 		present.OrWith(srcPresent);
 		present.Save(presentPath);
@@ -188,7 +183,7 @@ DegreesResult DegreeBuilder::Run() {
 		for (uint32_t local = 0; local < rowLength; ++local) {
 			result.maxOutDegree = std::max(result.maxOutDegree, OutDegrees_[local]);
 		}
-		common::OutputFile degFile(Workdir_.DegreesDir().Degrees(srcInterval).string());
+		common::OutputFile degFile(Workdir_.DegreesDir().Degrees(srcInterval));
 		degFile.Append(OutDegrees_.data(), uint64_t{rowLength} * common::kDegreeBytesPerVertex);
 	}
 

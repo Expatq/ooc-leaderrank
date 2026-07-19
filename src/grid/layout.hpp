@@ -5,6 +5,8 @@
 
 namespace lr::grid {
 
+class PartitionScheme;
+
 class Directory {
 public:
 	explicit Directory(std::filesystem::path path);
@@ -47,16 +49,7 @@ public:
 	std::filesystem::path BlocksIdx() const;
 	std::filesystem::path MetaFile() const;
 	std::filesystem::path RankFile(uint32_t side) const;
-};
-
-class WorkdirLayout {
-public:
-	explicit WorkdirLayout(std::filesystem::path workdir);
-
-	WorkdirRoot Root() const;
-
-private:
-	std::filesystem::path Workdir_;
+	void Validate(const PartitionScheme& scheme) const;
 };
 
 } // namespace lr::grid

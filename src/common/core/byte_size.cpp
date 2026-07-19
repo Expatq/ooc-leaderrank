@@ -33,8 +33,7 @@ uint64_t ByteSize::Parse(std::string_view text) {
 		digits.remove_suffix(1);
 	}
 	uint64_t value = 0;
-	const auto [parsedEnd, errorCode] =
-	    std::from_chars(digits.data(), digits.data() + digits.size(), value);
+	const auto [parsedEnd, errorCode] = std::from_chars(digits.data(), digits.data() + digits.size(), value);
 	if (errorCode != std::errc{} || parsedEnd != digits.data() + digits.size() || value == 0) {
 		throw std::runtime_error(std::format("invalid size: '{}'", text));
 	}

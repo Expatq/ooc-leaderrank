@@ -21,6 +21,20 @@ uint32_t PlanPartitions(uint64_t budgetBytes, uint32_t maxId, uint64_t edges) {
 	return PartitionPlanner(budgetBytes, kAuditThreads).Plan(maxId, edges).partitions;
 }
 
+TEST(PartitionScheme, CreateDerivesIntervalSize) {
+	EXPECT_EQ(PartitionScheme::Create(4, 2).intervalSize, 3u);
+	EXPECT_EQ(PartitionScheme::Create(4, 1).intervalSize, 5u);
+	EXPECT_EQ(PartitionScheme::Create(9, 3).intervalSize, 4u);
+}
+
+TEST(PartitionScheme, RankByteRangeCoversIntervals) {
+	const PartitionScheme scheme{4, 2, 3};
+	EXPECT_EQ(scheme.RankByteRange(0).offsetBytes, 0u);
+	EXPECT_EQ(scheme.RankByteRange(0).bytes, 24u);
+	EXPECT_EQ(scheme.RankByteRange(1).offsetBytes, 24u);
+	EXPECT_EQ(scheme.RankByteRange(1).bytes, 16u);
+}
+
 TEST(PartitionScheme, GeometryOfFormatExample) {
 	const PartitionScheme scheme{4, 2, 3};
 	EXPECT_EQ(scheme.VertexCount(), 5u);
