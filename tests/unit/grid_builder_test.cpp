@@ -22,10 +22,8 @@ namespace {
 using lr::common::CsvEdgeStream;
 using lr::common::Edge;
 using lr::common::InputFile;
-using lr::grid::BlockIndex;
 using lr::grid::BlockRef;
 using lr::grid::PartitionScheme;
-using lr::grid::WorkdirLayout;
 using lr::grid::WorkdirRoot;
 using lr::prepare::BlockAssembler;
 using lr::prepare::DegreeBuilder;
@@ -34,7 +32,7 @@ using lr::prepare::EdgeScatterer;
 constexpr uint64_t kTestArenaBytes = 1_MiB;
 
 WorkdirRoot MakeWorkdir(const std::string& name) {
-	const WorkdirRoot root = WorkdirLayout(testing::TempDir() + name).Root();
+	const WorkdirRoot root(testing::TempDir() + name);
 	std::filesystem::remove_all(root.Path());
 	std::filesystem::create_directories(root.DegreesDir().Path());
 	std::filesystem::create_directories(root.PresentDir().Path());
@@ -68,7 +66,7 @@ TEST(GridBuilder, MatchesFormatByteExample) {
 	EXPECT_EQ(assembly.droppedDuplicates, 0u);
 	EXPECT_EQ(assembly.maxInDegree, 2u);
 
-	const auto degrees = DegreeBuilder(scheme, workdir).Run();
+	const auto degrees = DegreeBuilder(scheme, workdir, lr::common::kMinIoChunkBytes).Run();
 	EXPECT_EQ(degrees.vertices, 4u);
 	EXPECT_EQ(degrees.maxOutDegree, 1u);
 
@@ -134,12 +132,11 @@ TEST(GridBuilder, RoundTripFiltersLoopsAndDuplicates) {
 			++total;
 		}
 	}
-	const std::set<std::pair<uint32_t, uint32_t>> expected{{1, 2}, {9, 0}, {0, 9}, {7, 3},
-	                                                       {3, 7}, {8, 1}, {1, 8}};
+	const std::set<std::pair<uint32_t, uint32_t>> expected{{1, 2}, {9, 0}, {0, 9}, {7, 3}, {3, 7}, {8, 1}, {1, 8}};
 	EXPECT_EQ(collected, expected);
 	EXPECT_EQ(total, expected.size());
 
-	const auto degrees = DegreeBuilder(scheme, workdir).Run();
+	const auto degrees = DegreeBuilder(scheme, workdir, lr::common::kMinIoChunkBytes).Run();
 	EXPECT_EQ(degrees.vertices, 7u);
 }
 
@@ -167,7 +164,7 @@ TEST(GridBuilder, AllSelfLoopsFailAtDegrees) {
 	const auto scatter = EdgeScatterer(scheme, workdir, kTestArenaBytes).Run(&stream);
 	EXPECT_EQ(scatter.edgesWritten, 0u);
 	BlockAssembler(scheme, workdir, kTestArenaBytes).Run();
-	EXPECT_THROW(DegreeBuilder(scheme, workdir).Run(), std::runtime_error);
+	EXPECT_THROW(DegreeBuilder(scheme, workdir, lr::common::kMinIoChunkBytes).Run(), std::runtime_error);
 }
 
 } // namespace
