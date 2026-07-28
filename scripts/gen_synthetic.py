@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import sys
+from pathlib import Path
 
 import numpy as np
 
@@ -16,14 +17,29 @@ def fail(message):
 
 def parse_size(text):
     suffixes = {"K": 2**10, "M": 2**20, "G": 2**30}
-    if text and text[-1].upper() in suffixes:
-        return int(float(text[:-1]) * suffixes[text[-1].upper()])
-    return int(text)
+    try:
+        if text and text[-1].upper() in suffixes:
+            value = int(float(text[:-1]) * suffixes[text[-1].upper()])
+        else:
+            value = int(text)
+    except (OverflowError, ValueError) as error:
+        raise argparse.ArgumentTypeError(f"invalid size: {text!r}") from error
+    if value <= 0:
+        raise argparse.ArgumentTypeError("size must be positive")
+    return value
 
 
 def parse_hypernodes(text):
-    count, degree = text.split(":")
-    return int(count), int(degree)
+    try:
+        count_text, degree_text = text.split(":", maxsplit=1)
+        count, degree = int(count_text), int(degree_text)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "hypernodes must use COUNT:DEGREE, for example 3:50000"
+        ) from error
+    if count < 0 or degree < 0:
+        raise argparse.ArgumentTypeError("hypernode count and degree must be non-negative")
+    return count, degree
 
 
 def sample_out_degrees(rng, vertices, avg_degree):
@@ -73,26 +89,39 @@ def estimate_vertices(target_bytes, avg_degree):
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Generate a reproducible directed graph with optional hypernodes."
+    )
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--vertices", type=int)
-    group.add_argument("--target-size", type=parse_size)
-    parser.add_argument("--avg-degree", type=int, default=16)
-    parser.add_argument("--hypernodes", type=parse_hypernodes, default=(0, 0))
-    parser.add_argument("--seed", type=int, required=True)
-    parser.add_argument("--out", required=True)
+    group.add_argument("--vertices", type=int, help="number of vertices")
+    group.add_argument("--target-size", type=parse_size,
+                       help="approximate CSV size, for example 512M or 2G")
+    parser.add_argument("--avg-degree", type=int, default=16,
+                        help="target average out-degree (default: 16)")
+    parser.add_argument("--hypernodes", type=parse_hypernodes, default=(0, 0),
+                        metavar="COUNT:DEGREE",
+                        help="add high in-degree vertices, for example 3:50000")
+    parser.add_argument("--seed", type=int, required=True,
+                        help="PCG64 seed for reproducible output")
+    parser.add_argument("--out", required=True, help="output CSV path")
     args = parser.parse_args()
 
-    vertices = args.vertices or estimate_vertices(args.target_size, args.avg_degree)
+    if args.avg_degree <= 0:
+        fail("--avg-degree must be positive")
+    if args.vertices is not None:
+        vertices = args.vertices
+    else:
+        vertices = estimate_vertices(args.target_size, args.avg_degree)
     if vertices < 2:
         fail("need at least 2 vertices")
     hypernode_count, hypernode_degree = args.hypernodes
-    if hypernode_count >= vertices:
+    if hypernode_count > vertices:
         fail("more hypernodes than vertices")
 
     rng = np.random.Generator(np.random.PCG64(args.seed))
     sources, targets = generate_edges(rng, vertices, args.avg_degree,
                                       hypernode_count, hypernode_degree)
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     write_csv(args.out, sources, targets)
     print(f"vertices={vertices} edges={sources.size} out={args.out}")
 

@@ -3,6 +3,7 @@ import argparse
 import collections
 import csv
 import statistics
+from pathlib import Path
 
 import matplotlib
 
@@ -42,13 +43,21 @@ def save(figure, path):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--csv", default="data/bench/results.csv")
-    parser.add_argument("--out-dir", default="data/bench")
-    parser.add_argument("--budget-mib", type=float, default=None)
+    parser = argparse.ArgumentParser(description="Plot thread benchmark results.")
+    parser.add_argument("--csv", default="data/bench/results.csv",
+                        help="CSV written by bench_threads.sh")
+    parser.add_argument("--out-dir", default="data/bench",
+                        help="directory for PNG files")
+    parser.add_argument("--budget-mib", type=float, default=None,
+                        help="draw the configured memory budget on the RSS chart")
     args = parser.parse_args()
 
+    if not Path(args.csv).is_file():
+        parser.error(f"input file not found: {args.csv}")
     medians = load(args.csv)
+    if not medians:
+        parser.error(f"no benchmark rows found in {args.csv}")
+    Path(args.out_dir).mkdir(parents=True, exist_ok=True)
     datasets = sorted({d for (d, _, _) in medians})
     tools = ["prepare", "rank"]
 

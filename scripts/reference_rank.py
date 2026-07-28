@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import sys
+from pathlib import Path
 
 import numpy as np
 
@@ -163,13 +164,19 @@ def write_ranks(path, vertices, ranks):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("edges")
-    parser.add_argument("--out", required=True)
-    parser.add_argument("--transpose", action="store_true")
+    parser = argparse.ArgumentParser(
+        description="Compute an independent in-memory LeaderRank reference."
+    )
+    parser.add_argument("edges", help="input CSV or TSV edge list")
+    parser.add_argument("--out", required=True, help="output rank CSV")
+    parser.add_argument("--transpose", action="store_true",
+                        help="swap source and destination IDs")
     args = parser.parse_args()
     import os
 
+    if not os.path.isfile(args.edges):
+        parser.error(f"input file not found: {args.edges}")
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     if os.path.getsize(args.edges) > SMALL_FILE_BYTES:
         src, dst = load_edges_fast(args.edges, args.transpose)
         vertices, ranks = leader_rank_sparse(src, dst)
