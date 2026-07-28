@@ -2,6 +2,9 @@ build/
 build-release/
 build-debug/
 cmake-build-*/
+
+/workdir/
+/ranks.csv
 tests/golden
 compile_commands.json
 

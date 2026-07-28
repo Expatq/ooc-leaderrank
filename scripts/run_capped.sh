@@ -2,13 +2,23 @@
 set -euo pipefail
 
 usage() {
-	echo "usage: scripts/run_capped.sh <budget: 128m|64m|...> <command...>" >&2
-	echo "  mac: command and paths are INSIDE the container (repo is mounted at /work)" >&2
-	echo "  linux: plain command, capped via systemd-run" >&2
-	exit 1
+	cat <<'EOF'
+usage: scripts/run_capped.sh <budget: 128m|64m|...> <command...>
+
+  macOS: runs the command in the ooc-leaderrank-build Podman image.
+         Repository paths are available under /work.
+  Linux: runs the command in a transient user scope through systemd-run.
+EOF
 }
 
-[ $# -ge 2 ] || usage
+case "${1:-}" in
+-h|--help)
+	usage
+	exit 0
+	;;
+esac
+
+[ $# -ge 2 ] || { usage >&2; exit 1; }
 BUDGET="$1"
 shift
 
@@ -21,7 +31,15 @@ report() {
 }
 
 if [ "$(uname)" = "Darwin" ]; then
+	if ! command -v podman >/dev/null 2>&1; then
+		echo "run_capped: podman is required on macOS" >&2
+		exit 1
+	fi
 	IMAGE=ooc-leaderrank-build
+	if ! podman image exists "$IMAGE"; then
+		echo "run_capped: image '$IMAGE' is missing; build containers/Containerfile first" >&2
+		exit 1
+	fi
 	NAME="lrcap_$$"
 	set +e
 	podman run --name "$NAME" --memory="$BUDGET" --memory-swap="$BUDGET" \
@@ -34,7 +52,11 @@ if [ "$(uname)" = "Darwin" ]; then
 	OOM=$(podman inspect --format '{{.State.OOMKilled}}' "$NAME" 2>/dev/null || echo n/a)
 	podman rm "$NAME" >/dev/null 2>&1 || true
 	report "$CODE" "see cgroup_memory_peak above" "$OOM"
-else
+elif [ "$(uname)" = "Linux" ]; then
+	if ! command -v systemd-run >/dev/null 2>&1; then
+		echo "run_capped: systemd-run is required on Linux" >&2
+		exit 1
+	fi
 	set +e
 	systemd-run --user --scope --quiet -p MemoryMax="$BUDGET" -p MemorySwapMax=0 \
 		bash -c '"$@"; code=$?
@@ -45,7 +67,10 @@ else
 	set -e
 	OOM=n/a
 	if [ "$CODE" -eq 137 ]; then
-		OOM=true
+		OOM=possible
 	fi
 	report "$CODE" "see cgroup_memory_peak above" "$OOM"
+else
+	echo "run_capped: unsupported operating system: $(uname)" >&2
+	exit 1
 fi
